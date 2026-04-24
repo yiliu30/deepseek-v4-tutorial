@@ -1,0 +1,13 @@
+[project]
+name = "ds-v4-tutorial"
+version = "0.1.0"
+description = "DeepSeek V4 architecture study and inference on consumer GPUs"
+requires-python = ">=3.12"
+
+[project.optional-dependencies]
+inference = [
+    "torch>=2.10.0",
+    "tilelang==0.1.9",
+    "transformers>=5.0.0",
+    "safetensors>=0.7.0",
+]
