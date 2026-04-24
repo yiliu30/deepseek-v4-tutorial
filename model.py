@@ -422,10 +422,12 @@ class Indexer(torch.nn.Module):
         if world_size > 1:
             dist.all_reduce(index_score)
         if start_pos == 0:
+            # Device fix: consumer GPU (tensors created on CPU by default)
             mask = torch.arange(seqlen // ratio, device=q.device).repeat(seqlen, 1) >= torch.arange(1, seqlen + 1, device=q.device).unsqueeze(1) // ratio
             index_score += torch.where(mask, float("-inf"), 0)
         topk_idxs = index_score.topk(min(self.index_topk, end_pos // ratio), dim=-1)[1]
         if start_pos == 0:
+            # Device fix: consumer GPU (tensors created on CPU by default)
             mask = topk_idxs >= torch.arange(1, seqlen + 1, device=q.device).unsqueeze(1) // ratio
             topk_idxs = torch.where(mask, -1, topk_idxs + offset)
         else:
@@ -435,7 +437,14 @@ class Indexer(torch.nn.Module):
 
 class Attention(nn.Module):
     """Multi-head Latent Attention (MLA) with sliding window + optional KV compression.
-    Uses low-rank Q projection (wq_a -> q_norm -> wq_b) and grouped low-rank O projection."""
+
+    Three attention types, dispatched by compress_ratio:
+        SWA-only  (ratio=0)   — layers 0, 1, 43: pure sliding window
+        C4A       (ratio=4)   — even middle layers: window + compressor(4:1) + indexer
+        C128A     (ratio=128) — odd middle layers:  window + compressor(128:1)
+
+    Uses low-rank Q projection (wq_a -> q_norm -> wq_b) and grouped low-rank O projection.
+    """
     def __init__(self, layer_id: int, args: ModelArgs):
         super().__init__()
         self.layer_id = layer_id
@@ -481,66 +490,146 @@ class Attention(nn.Module):
                                          rope_theta, args.rope_factor, args.beta_fast, args.beta_slow)
         self.register_buffer("freqs_cis", freqs_cis, persistent=False)
 
-    def forward(self, x: torch.Tensor, start_pos: int):
+    # ── Shared projections ──────────────────────────────────────────────
+
+    def _project_qkv(self, x: torch.Tensor, start_pos: int):
+        """Q and KV projections shared by all attention types.
+        Returns (q, qr, kv, freqs_cis) where qr is the pre-wq_b latent for the indexer."""
         bsz, seqlen, _ = x.size()
         freqs_cis = self.freqs_cis[start_pos:start_pos+seqlen]
-        win = self.window_size
-        ratio = self.compress_ratio
         rd = self.rope_head_dim
-        if self.compress_ratio and self.compressor.kv_cache is None:
-            self.compressor.kv_cache = self.kv_cache[:, win:]
-            self.compressor.freqs_cis = self.freqs_cis
-            if self.indexer is not None:
-                self.indexer.freqs_cis = self.freqs_cis
-        # q
+
+        # Q: low-rank project → per-head expand → RMS norm → RoPE
         qr = q = self.q_norm(self.wq_a(x))
         q = self.wq_b(q).unflatten(-1, (self.n_local_heads, self.head_dim))
         q *= torch.rsqrt(q.square().mean(-1, keepdim=True) + self.eps)
         apply_rotary_emb(q[..., -rd:], freqs_cis)
 
-        # win kv & topk_idxs
+        # KV: single shared vector → RMS norm → RoPE → FP8 quantize non-rope dims
         kv = self.wkv(x)
         kv = self.kv_norm(kv)
         apply_rotary_emb(kv[..., -rd:], freqs_cis)
-        # FP8-simulate non-rope dims to match QAT; rope dims stay bf16 for positional precision
         act_quant(kv[..., :-rd], 64, scale_fmt, scale_dtype, True)
-        topk_idxs = get_window_topk_idxs(win, bsz, seqlen, start_pos).to(x.device)
-        if self.compress_ratio:
-            offset = kv.size(1) if start_pos == 0 else win
-            if self.indexer is not None:
-                compress_topk_idxs = self.indexer(x, qr, start_pos, offset)
-            else:
-                compress_topk_idxs = get_compress_topk_idxs(ratio, bsz, seqlen, start_pos, offset).to(x.device)
-            topk_idxs = torch.cat([topk_idxs, compress_topk_idxs], dim=-1)
-        topk_idxs = topk_idxs.int()
 
-        # compress kv & attn
+        return q, qr, kv, freqs_cis
+
+    def _project_output(self, o: torch.Tensor, freqs_cis: torch.Tensor):
+        """Output projection shared by all attention types: inverse RoPE → grouped low-rank."""
+        bsz, seqlen = o.shape[:2]
+        rd = self.rope_head_dim
+        apply_rotary_emb(o[..., -rd:], freqs_cis, True)
+        o = o.view(bsz, seqlen, self.n_local_groups, -1)
+        wo_a = self.wo_a.weight.view(self.n_local_groups, self.o_lora_rank, -1)
+        o = torch.einsum("bsgd,grd->bsgr", o, wo_a)
+        return self.wo_b(o.flatten(2))
+
+    def _update_window_cache(self, kv: torch.Tensor, bsz: int, seqlen: int, start_pos: int):
+        """Write KV into the sliding-window portion of kv_cache."""
+        win = self.window_size
         if start_pos == 0:
             if seqlen <= win:
                 self.kv_cache[:bsz, :seqlen] = kv
             else:
                 cutoff = seqlen % win
-                self.kv_cache[:bsz, cutoff: win], self.kv_cache[:bsz, :cutoff] = kv[:, -win:].split([win - cutoff, cutoff], dim=1)
-            if self.compress_ratio:
-                if (kv_compress := self.compressor(x, start_pos)) is not None:
-                    kv = torch.cat([kv, kv_compress], dim=1)
-            # We performed QAT here, kv could also use fp8 format, though current implementation uses bf16
-            o = sparse_attn(q, kv, self.attn_sink, topk_idxs, self.softmax_scale)
+                self.kv_cache[:bsz, cutoff:win], self.kv_cache[:bsz, :cutoff] = \
+                    kv[:, -win:].split([win - cutoff, cutoff], dim=1)
         else:
             self.kv_cache[:bsz, start_pos % win] = kv.squeeze(1)
-            if self.compress_ratio:
-                self.compressor(x, start_pos)
-            o = sparse_attn(q, self.kv_cache[:bsz], self.attn_sink, topk_idxs, self.softmax_scale)
-        apply_rotary_emb(o[..., -rd:], freqs_cis, True)
 
-        # o
-        o = o.view(bsz, seqlen, self.n_local_groups, -1)
-        wo_a = self.wo_a.weight.view(self.n_local_groups, self.o_lora_rank, -1)
-        # NOTE: wo_a is FP8 in checkpoint; could do FP8 einsum here for better perf,
-        # but using BF16 for simplicity.
-        o = torch.einsum("bsgd,grd->bsgr", o, wo_a)
-        x = self.wo_b(o.flatten(2))
-        return x
+    # ── SWA-only forward (ratio=0): pure sliding window ────────────────
+
+    def forward_swa(self, x: torch.Tensor, start_pos: int):
+        """Sliding-Window Attention only. Used by layers 0, 1, and 43.
+        No KV compression — attends only to the most recent `window_size` tokens."""
+        bsz, seqlen, _ = x.size()
+        q, qr, kv, freqs_cis = self._project_qkv(x, start_pos)
+
+        # Device fix: consumer GPU (tensors created on CPU by default)
+        topk_idxs = get_window_topk_idxs(self.window_size, bsz, seqlen, start_pos).to(x.device)
+        topk_idxs = topk_idxs.int()
+
+        self._update_window_cache(kv, bsz, seqlen, start_pos)
+        if start_pos == 0:
+            o = sparse_attn(q, kv, self.attn_sink, topk_idxs, self.softmax_scale)
+        else:
+            o = sparse_attn(q, self.kv_cache[:bsz], self.attn_sink, topk_idxs, self.softmax_scale)
+
+        return self._project_output(o, freqs_cis)
+
+    # ── C4A forward (ratio=4): window + compressor + indexer ───────────
+
+    def forward_c4a(self, x: torch.Tensor, start_pos: int):
+        """Compress-4 Attention. Used by even middle layers (2, 4, ..., 42).
+        Combines sliding window with 4:1 learned compression and a learned indexer
+        that selects which compressed KVs each query should attend to."""
+        bsz, seqlen, _ = x.size()
+        ratio = self.compress_ratio
+        q, qr, kv, freqs_cis = self._project_qkv(x, start_pos)
+
+        if self.compressor.kv_cache is None:
+            self.compressor.kv_cache = self.kv_cache[:, self.window_size:]
+            self.compressor.freqs_cis = self.freqs_cis
+            self.indexer.freqs_cis = self.freqs_cis
+
+        # Window indices + learned indexer selects compressed KV positions
+        # Device fix: consumer GPU (tensors created on CPU by default)
+        topk_idxs = get_window_topk_idxs(self.window_size, bsz, seqlen, start_pos).to(x.device)
+        offset = kv.size(1) if start_pos == 0 else self.window_size
+        compress_topk_idxs = self.indexer(x, qr, start_pos, offset)
+        topk_idxs = torch.cat([topk_idxs, compress_topk_idxs], dim=-1).int()
+
+        self._update_window_cache(kv, bsz, seqlen, start_pos)
+        if start_pos == 0:
+            if (kv_compress := self.compressor(x, start_pos)) is not None:
+                kv = torch.cat([kv, kv_compress], dim=1)
+            o = sparse_attn(q, kv, self.attn_sink, topk_idxs, self.softmax_scale)
+        else:
+            self.compressor(x, start_pos)
+            o = sparse_attn(q, self.kv_cache[:bsz], self.attn_sink, topk_idxs, self.softmax_scale)
+
+        return self._project_output(o, freqs_cis)
+
+    # ── C128A forward (ratio=128): window + compressor ─────────────────
+
+    def forward_c128a(self, x: torch.Tensor, start_pos: int):
+        """Compress-128 Attention. Used by odd middle layers (3, 5, ..., 41).
+        Combines sliding window with 128:1 compression (no indexer — all compressed
+        positions are attended to since there are very few of them)."""
+        bsz, seqlen, _ = x.size()
+        ratio = self.compress_ratio
+        q, qr, kv, freqs_cis = self._project_qkv(x, start_pos)
+
+        if self.compressor.kv_cache is None:
+            self.compressor.kv_cache = self.kv_cache[:, self.window_size:]
+            self.compressor.freqs_cis = self.freqs_cis
+
+        # Window indices + deterministic compressed KV indices (no indexer needed)
+        # Device fix: consumer GPU (tensors created on CPU by default)
+        topk_idxs = get_window_topk_idxs(self.window_size, bsz, seqlen, start_pos).to(x.device)
+        offset = kv.size(1) if start_pos == 0 else self.window_size
+        compress_topk_idxs = get_compress_topk_idxs(ratio, bsz, seqlen, start_pos, offset).to(x.device)
+        topk_idxs = torch.cat([topk_idxs, compress_topk_idxs], dim=-1).int()
+
+        self._update_window_cache(kv, bsz, seqlen, start_pos)
+        if start_pos == 0:
+            if (kv_compress := self.compressor(x, start_pos)) is not None:
+                kv = torch.cat([kv, kv_compress], dim=1)
+            o = sparse_attn(q, kv, self.attn_sink, topk_idxs, self.softmax_scale)
+        else:
+            self.compressor(x, start_pos)
+            o = sparse_attn(q, self.kv_cache[:bsz], self.attn_sink, topk_idxs, self.softmax_scale)
+
+        return self._project_output(o, freqs_cis)
+
+    # ── Dispatcher ──────────────────────────────────────────────────────
+
+    def forward(self, x: torch.Tensor, start_pos: int):
+        if self.compress_ratio == 0:
+            return self.forward_swa(x, start_pos)
+        elif self.compress_ratio == 4:
+            return self.forward_c4a(x, start_pos)
+        else:
+            return self.forward_c128a(x, start_pos)
 
 
 class Gate(nn.Module):
