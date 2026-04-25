@@ -158,9 +158,9 @@ Naive baseline (no compression, 61 layers × 1M × 1024 B): **~61.0 GiB**
 | Layer Type | Count | Slots/Layer | Bytes/Slot | Subtotal |
 |-----------|-------|-------------|-----------|---------|
 | SWA (main) | 2 | 128 | 1024 | **0.00 GiB** |
-| C4A main KV | 21 | 262,272 | 1024 | **5.25 GiB** |
+| C4A main KV | 21 | 128 + 262,144 = 262,272 | 1024 | **5.25 GiB** |
 | C4A indexer KV | 21 | 262,144 | 256 | **1.31 GiB** |
-| C128A | 20 | 8,320 | 1024 | **0.16 GiB** |
+| C128A | 20 | 128 + 8,192 = 8,320 | 1024 | **0.16 GiB** |
 | **Total** | | | | **~6.73 GiB** |
 
 Naive baseline (no compression, 43 layers × 1M × 1024 B): **~43.0 GiB**
