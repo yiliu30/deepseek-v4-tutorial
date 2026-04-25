@@ -287,3 +287,6 @@ C4A compressed slots grow linearly at rate 1/4, C128A at rate 1/128. The window 
 ## Summary
 
 V4-Pro and V4-Flash are the **same architecture at different scales**. The attention mechanism — MLA with C4A/C128A compressed attention, learned indexer, and sparse gather-based computation — is identical. Flash trades ~30% fewer layers, ~43% smaller hidden dim, and ~33% fewer experts for proportionally faster inference, while keeping the same 1M context capability and similar 6× KV cache compression ratio.
+
+### Ref
+- https://vllm.ai/blog/deepseek-v4
