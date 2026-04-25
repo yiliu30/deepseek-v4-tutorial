@@ -20,25 +20,17 @@ The capital of France is Paris.<｜end▁of▁sentence｜>
 
 ## Kernel Support Status (RTX 5090 D)
 
-| Kernel | Status | Notes |
-|--------|--------|-------|
-| `act_quant` (FP8) | ✅ tilelang | Block-wise FP8 quantization |
-| `fp4_act_quant` (FP4) | ✅ tilelang | Block-wise FP4 quantization |
-| `fp8_gemm` | ✅ tilelang | FP8 GEMM with per-block scaling |
-| `fp4_gemm` | ✅ tilelang | FP8 activation × FP4 weight GEMM |
-| `hc_split_sinkhorn` | ✅ tilelang | Hyper-Connection split + Sinkhorn normalization |
-| `sparse_attn` | ⚠️ PyTorch fallback | Needs 141KB shared memory; RTX 5090 D max is 99KB |
+| Kernel | TileLang | Triton | Note
+|--------|--------|-------|-------|
+| `act_quant` (FP8) | ✅ | ✅ | Block-wise FP8 quantization |
+| `fp4_act_quant` (FP4) | ✅ | ✅ | Block-wise FP4 quantization |
+| `fp8_gemm` | ✅ | ✅ | FP8 GEMM with per-block scaling |
+| `fp4_gemm` | ✅ | ✅ | FP8 activation × FP4 weight GEMM |
+| `hc_split_sinkhorn` | ✅ | ✅ | Hyper-Connection split + Sinkhorn normalization |
+| `sparse_attn` | ⚠️ PyTorch fallback | ✅ | Needs 141KB shared memory; RTX 5090 D max is 99KB |
 
 The `sparse_attn` kernel allocates all 64 attention heads × 512 dims in shared memory simultaneously. A100 (164KB) and H100 (228KB) can handle this; consumer Blackwell (99KB optin max) cannot. The PyTorch fallback uses `torch.gather` + `einsum` and produces identical results.
 
-## Benchmark Results
-
-DeepSeek-V4-Flash on 8× RTX 5090 D, batch_size=1:
-
-| Prompt Length | Prefill | Decode | GPU Memory |
-|---------------|---------|--------|------------|
-| 128 tokens | 452 ms | 5.7 tok/s | 21.5 GB/GPU |
-| 512 tokens | 584 ms | 5.7 tok/s | 21.8 GB/GPU |
 
 ## Quick Start
 
@@ -132,16 +124,5 @@ This exercises all V4-specific components: SWA-only, C4A (compressor+indexer), C
     └── kv_cache_analysis.md         # First-principles KV cache reduction analysis
 ```
 
-## Architecture Overview
-
-DeepSeek V4 uses three KV cache reduction methods combined per-layer:
-
-| Layer Type | Layers | Methods | KV Reduction |
-|------------|--------|---------|--------------|
-| SWA-only | 0, 1, 43 | Sliding window (128) | 32× |
-| C4A | 2,4,6,...,42 | Window + Compress(4:1) + Indexer | 3.5× |
-| C128A | 3,5,7,...,41 | Window + Compress(128:1) | 25× |
-
-Combined with MLA (single 512-dim KV shared across 64 heads), total KV cache reduction is **~224-2048×** vs standard MHA.
-
-See [docs/kv_cache_analysis.md](docs/kv_cache_analysis.md) for detailed analysis and [docs/deepseek_v4_walkthrough.md](docs/deepseek_v4_walkthrough.md) for the full tensor-shape trace.
+## More Analysis
+- [KV Cache](./docs/v4_pro_vs_flash_arch_and_kvcache.md)
