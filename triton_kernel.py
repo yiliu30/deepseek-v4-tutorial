@@ -467,18 +467,14 @@ def _sparse_attn_kernel(
         scores = tl.where(valid, scores, float('-inf'))
 
         # Online softmax update
-        m_new = tl.maximum(m_prev, tl.max(scores))
-        # Correct previous accumulator
-        alpha = tl.math.exp(m_prev - m_new)
-        # New exp scores
-        p = tl.math.exp(scores - m_new)
-        l_new = l_prev * alpha + tl.sum(p)
-
-        # Update accumulator: acc = acc * alpha + p @ kv_block
-        acc = acc * alpha + tl.sum(p[:, None] * kv_block, axis=0)
-
-        m_prev = m_new
-        l_prev = l_new
+        m_block_max = tl.max(scores)
+        if m_block_max > float('-inf'):
+            m_new = tl.maximum(m_prev, m_block_max)
+            alpha = tl.math.exp(m_prev - m_new)
+            p = tl.math.exp(scores - m_new)
+            l_prev = l_prev * alpha + tl.sum(p)
+            acc = acc * alpha + tl.sum(p[:, None] * kv_block, axis=0)
+            m_prev = m_new
 
     # Add sink token: exp(sink_bias - m) contributes to denominator only (zero value)
     sink_bias = tl.load(SINK_ptr + pid_h).to(tl.float32)
