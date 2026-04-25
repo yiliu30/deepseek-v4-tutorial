@@ -39,7 +39,7 @@ Side-by-side comparison of V4-Pro (61 layers, full-size) and V4-Flash (43 layers
 | **hc_mult / hc_sinkhorn_iters** | 4 / 20 | Hyper-Connection config |
 | **num_nextn_predict_layers** | 1 | Next-token prediction head |
 
-**Key takeaway**: Flash is Pro with fewer layers, fewer heads, smaller hidden size, and fewer experts — but the **attention mechanism is identical** (same head_dim, same indexer config, same compression ratios pattern, same window size).
+**Key takeaway**: Flash is Pro with fewer layers, fewer heads, smaller hidden size, and fewer experts — but the **attention mechanism is identical** (same head_dim, same indexer config, same alternating C4A/C128A pattern in the middle layers, same window size).
 
 ---
 
@@ -120,7 +120,7 @@ Each cached KV entry is a **512-element bf16 vector** = **1024 bytes**.
 
 ### Why the Short Window (128)?
 
-The `sliding_window = 128` is surprisingly small (V3.2 used 8192). It exists to solve a **causal gap problem** with C128A:
+The `sliding_window = 128` is surprisingly small. It exists to solve a **causal gap problem** with C128A:
 
 With C128A (128:1 compression), the first compressed token summarizes positions 0–127. A query at position 100 **cannot attend to this compressed token** (it would see information from positions 101–127 that it shouldn't, violating causality). The 128-slot window ensures the query can still access raw positions 0–100 via uncompressed attention.
 
@@ -143,7 +143,7 @@ For C4A (4:1), the gap is only 3 positions, but the same window covers it.
 | SWA (main) | 0 | 128 | 1024 | **0 GiB** |
 | C4A main KV | 30 | 128 + 262,144 = 262,272 | 1024 | **7.50 GiB** |
 | C4A indexer KV | 30 | 262,144 | 256 | **1.88 GiB** |
-| C128A | 31 | 128 + 8,192 = 8,320 | 1024 | **0.24 GiB** |
+| C128A | 31 | 128 + 8,192 = 8,320 | 1024 | **0.25 GiB** |
 | **Total** | | | | **~9.62 GiB** |
 
 Per-layer breakdown (matches vLLM blog):
@@ -290,3 +290,5 @@ V4-Pro and V4-Flash are the **same architecture at different scales**. The atten
 
 ### Ref
 - https://vllm.ai/blog/deepseek-v4
+- https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash/blob/main/config.json
+- https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro/blob/main/config.json
