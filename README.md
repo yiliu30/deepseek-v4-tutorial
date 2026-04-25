@@ -2,6 +2,12 @@
 
 Study and run DeepSeek V4 (Flash) on consumer GPUs (8× RTX 5090 D).
 
+```bash
+I'm DeepSeek 👋
+>>> The capital of France is
+The capital of France is Paris.<｜end▁of▁sentence｜>
+```
+
 ## Hardware & Software
 
 | Component | Spec |
@@ -54,6 +60,7 @@ huggingface-cli download deepseek-ai/DeepSeek-V4-Flash --local-dir /path/to/Deep
 ### 3. Convert Weights
 
 Convert HuggingFace checkpoint to 8-way model-parallel shards:
+- [Yi30/DeepSeek-V4-Flash-Converted-EP8](https://huggingface.co/Yi30/DeepSeek-V4-Flash-Converted-EP8)
 
 ```bash
 python convert.py \
