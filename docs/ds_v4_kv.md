@@ -128,3 +128,13 @@ Select top-512 compressed positions from the 1024 candidates.
 Attend to selected compressed entries + SWA entries using FlashMLA
 (FP8 KV dequantized to BF16 before tensor cores).
 → `Q × gathered_K [512+128 = 640, 512-dim] → output [1, 512-dim]`
+
+
+## References
+
+- [vLLM blog: DeepSeek V4 support](https://vllm.ai/blog/deepseek-v4)
+- [DeepSeek V4 Pro config](https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro/blob/main/config.json)
+- [DeepSeek V4 Flash config](https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash/blob/main/config.json)
+- vLLM source: `vllm/model_executor/layers/deepseek_v4_attention.py`,
+  `vllm/model_executor/layers/deepseek_compressor.py`,
+  `vllm/model_executor/layers/sparse_attn_indexer.py`
