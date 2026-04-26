@@ -18,6 +18,19 @@ The capital of France is Paris.<｜end▁of▁sentence｜>
 | tilelang | 0.1.9 |
 | Model | DeepSeek-V4-Flash (43 layers, 256 experts, 4096 hidden dim, ~149GB FP4) |
 
+## Kernel Support Status (RTX 5090 D)
+
+| Kernel | TileLang | Triton | Note
+|--------|--------|-------|-------|
+| `act_quant` (FP8) | ✅ | ✅ | Block-wise FP8 quantization |
+| `fp4_act_quant` (FP4) | ✅ | ✅ | Block-wise FP4 quantization |
+| `fp8_gemm` | ✅ | ✅ | FP8 GEMM with per-block scaling |
+| `fp4_gemm` | ✅ | ✅ | FP8 activation × FP4 weight GEMM |
+| `hc_split_sinkhorn` | ✅ | ✅ | Hyper-Connection split + Sinkhorn normalization |
+| `sparse_attn` | ⚠️ PyTorch fallback | ✅ | Needs 141KB shared memory; RTX 5090 D max is 99KB |
+
+The `sparse_attn` kernel allocates all 64 attention heads × 512 dims in shared memory simultaneously. A100 (164KB) and H100 (228KB) can handle this; consumer Blackwell (99KB optin max) cannot. The PyTorch fallback uses `torch.gather` + `einsum` and produces identical results.
+
 
 ## Quick Start
 
