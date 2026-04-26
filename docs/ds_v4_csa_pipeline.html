@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DeepSeek V4: CSA Pipeline</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&display=swap');
+
+  :root {
+    --bg: #ffffff;
+    --surface: #f6f7f9;
+    --surface-2: #eef0f3;
+    --border: #d4d7de;
+    --text: #1a1c22;
+    --text-dim: #5a5e6e;
+    --text-muted: #8b8f9e;
+
+    --swa: #2563eb;
+    --swa-bg: rgba(37, 99, 235, 0.06);
+    --swa-border: rgba(37, 99, 235, 0.30);
+
+    --compress: #7c3aed;
+    --compress-bg: rgba(124, 58, 237, 0.06);
+    --compress-border: rgba(124, 58, 237, 0.30);
+
+    --indexer: #059669;
+    --indexer-bg: rgba(5, 150, 105, 0.06);
+    --indexer-border: rgba(5, 150, 105, 0.30);
+
+    --attn: #d97706;
+    --attn-bg: rgba(217, 119, 6, 0.06);
+    --attn-border: rgba(217, 119, 6, 0.30);
+
+    --input: #4f46e5;
+    --input-bg: rgba(79, 70, 229, 0.06);
+    --input-border: rgba(79, 70, 229, 0.30);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DM Sans', sans-serif;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(0,0,0,0.02) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,0,0,0.02) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .container {
+    position: relative;
+    z-index: 1;
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 48px 40px 64px;
+  }
+
+  header { margin-bottom: 56px; }
+
+  header h1 {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 28px;
+    font-weight: 600;
+    letter-spacing: -0.5px;
+    margin-bottom: 8px;
+  }
+
+  header h1 span.accent { color: var(--attn); }
+
+  header p {
+    color: var(--text-dim);
+    font-size: 15px;
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 300;
+  }
+
+  .pipeline-svg { width: 100%; height: 820px; }
+
+  .node-group { cursor: default; }
+
+  .node-rect {
+    rx: 8; ry: 8;
+    transition: filter 0.3s ease;
+  }
+
+  .node-group:hover .node-rect {
+    filter: drop-shadow(0 2px 12px rgba(0,0,0,0.10));
+  }
+
+  .node-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 600;
+    font-size: 13px;
+    fill: var(--text);
+    pointer-events: none;
+  }
+
+  .node-step {
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 700;
+    font-size: 10px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    pointer-events: none;
+  }
+
+  .node-desc {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 12px;
+    fill: var(--text-dim);
+    pointer-events: none;
+  }
+
+  .node-shape {
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 400;
+    font-size: 11px;
+    pointer-events: none;
+  }
+
+  .node-io {
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 300;
+    font-size: 10px;
+    fill: var(--text-muted);
+    pointer-events: none;
+  }
+
+  .connector {
+    fill: none;
+    stroke-width: 1.5;
+    opacity: 0.45;
+    transition: opacity 0.3s ease;
+  }
+
+  .connector:hover { opacity: 0.85; }
+
+  @keyframes dashFlow { to { stroke-dashoffset: -20; } }
+
+  .connector-animated {
+    stroke-dasharray: 6 4;
+    animation: dashFlow 1.2s linear infinite;
+  }
+
+  .legend {
+    display: flex;
+    gap: 28px;
+    margin-top: 40px;
+    padding: 16px 24px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    width: fit-content;
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+
+  .legend-dot { width: 10px; height: 10px; border-radius: 3px; }
+
+  .tooltip {
+    position: fixed;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--text);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+    z-index: 100;
+    max-width: 340px;
+    line-height: 1.6;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.10);
+  }
+
+  .tooltip.visible { opacity: 1; }
+
+  @keyframes fadeSlideUp {
+    from { opacity: 0; transform: translateY(16px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .node-group {
+    opacity: 0;
+    animation: fadeSlideUp 0.5s ease forwards;
+  }
+
+  .node-group:nth-child(1) { animation-delay: 0.1s; }
+  .node-group:nth-child(2) { animation-delay: 0.2s; }
+  .node-group:nth-child(3) { animation-delay: 0.3s; }
+  .node-group:nth-child(4) { animation-delay: 0.4s; }
+  .node-group:nth-child(5) { animation-delay: 0.5s; }
+  .node-group:nth-child(6) { animation-delay: 0.6s; }
+  .node-group:nth-child(7) { animation-delay: 0.7s; }
+  .node-group:nth-child(8) { animation-delay: 0.8s; }
+
+  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+  .connectors {
+    opacity: 0;
+    animation: fadeIn 0.8s ease 0.9s forwards;
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <header>
+    <h1>DeepSeek V4<span class="accent">:</span> CSA Pipeline</h1>
+    <p>Compressed Sparse Attention · 4096 Token Decode</p>
+  </header>
+
+  <svg class="pipeline-svg" viewBox="0 0 1340 820" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <marker id="arrow-swa" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+        <path d="M0,0 L8,3 L0,6" fill="none" stroke="var(--swa)" stroke-width="1.5"/>
+      </marker>
+      <marker id="arrow-compress" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+        <path d="M0,0 L8,3 L0,6" fill="none" stroke="var(--compress)" stroke-width="1.5"/>
+      </marker>
+      <marker id="arrow-indexer" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+        <path d="M0,0 L8,3 L0,6" fill="none" stroke="var(--indexer)" stroke-width="1.5"/>
+      </marker>
+      <marker id="arrow-attn" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+        <path d="M0,0 L8,3 L0,6" fill="none" stroke="var(--attn)" stroke-width="1.5"/>
+      </marker>
+      <marker id="arrow-input" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+        <path d="M0,0 L8,3 L0,6" fill="none" stroke="var(--input)" stroke-width="1.5"/>
+      </marker>
+    </defs>
+
+    <!-- CONNECTORS -->
+    <g class="connectors">
+      <path class="connector connector-animated" stroke="var(--swa)" d="M 250,130 L 250,240" marker-end="url(#arrow-swa)"/>
+      <path class="connector connector-animated" stroke="var(--compress)" d="M 530,130 L 530,240" marker-end="url(#arrow-compress)"/>
+      <path class="connector connector-animated" stroke="var(--indexer)" d="M 530,130 L 770,130 L 770,240" marker-end="url(#arrow-indexer)"/>
+      <path class="connector connector-animated" stroke="var(--compress)" d="M 530,370 L 530,440 Q 530,460 510,460 L 340,460 Q 320,460 320,480 L 320,500 Q 320,520 340,520 L 420,520 Q 440,520 440,540 L 440,600" marker-end="url(#arrow-compress)"/>
+      <path class="connector connector-animated" stroke="var(--indexer)" d="M 770,370 L 770,440 L 870,440 L 870,470" marker-end="url(#arrow-indexer)"/>
+      <path class="connector connector-animated" stroke="var(--indexer)" d="M 870,590 L 870,640" marker-end="url(#arrow-indexer)"/>
+      <path class="connector connector-animated" stroke="var(--attn)" d="M 780,710 L 620,710 L 620,680 Q 620,660 600,660 L 560,660 Q 540,660 540,680 L 540,700" marker-end="url(#arrow-attn)"/>
+      <path class="connector connector-animated" stroke="var(--swa)" d="M 250,370 L 250,500 Q 250,520 270,520 L 340,520 Q 360,520 360,540 L 360,600" marker-end="url(#arrow-swa)"/>
+      <path class="connector connector-animated" stroke="var(--indexer)" stroke-dasharray="3 3" d="M 1050,180 L 1050,530 Q 1050,540 1040,540 L 960,540" marker-end="url(#arrow-indexer)" opacity="0.35"/>
+      <path class="connector connector-animated" stroke="var(--attn)" stroke-dasharray="3 3" d="M 1210,180 L 1210,740 Q 1210,760 1190,760 L 600,760" marker-end="url(#arrow-attn)" opacity="0.35"/>
+      <text x="370" y="454" font-family="JetBrains Mono" font-size="9" fill="var(--text-muted)" font-weight="500">gather by indices</text>
+    </g>
+
+    <!-- NODES -->
+    <g class="node-group" data-tooltip="Raw hidden states from the previous layer. All 4096 tokens processed during prefill, 1 token during decode.">
+      <rect class="node-rect" x="140" y="50" width="500" height="80" fill="var(--input-bg)" stroke="var(--input-border)" stroke-width="1"/>
+      <text class="node-step" x="160" y="76" fill="var(--input)" opacity="0.7">INPUT</text>
+      <text class="node-label" x="210" y="76">4096 Tokens</text>
+      <text class="node-shape" x="160" y="108" fill="var(--input)">[4096, hidden_size]</text>
+      <text class="node-desc" x="380" y="108">hidden states from transformer layer</text>
+    </g>
+
+    <g class="node-group" data-tooltip="Indexer Q: projected via indexer's own wq_b into 64 heads × 128-dim, then RoPE + FP8/FP4 quantized. Used only for scoring, not final attention.">
+      <rect class="node-rect" x="980" y="50" width="150" height="130" fill="var(--indexer-bg)" stroke="var(--indexer-border)" stroke-width="1"/>
+      <text class="node-step" x="1000" y="76" fill="var(--indexer)" opacity="0.7">INDEXER Q</text>
+      <text class="node-shape" x="1000" y="100" fill="var(--indexer)">[1, 64h, 128]</text>
+      <text class="node-desc" x="1000" y="120">for scoring</text>
+      <text class="node-desc" x="1000" y="136">(FP8 / MXFP4)</text>
+      <line x1="1000" y1="148" x2="1110" y2="148" stroke="var(--border)" stroke-width="0.5"/>
+      <text class="node-step" x="1000" y="166" fill="var(--attn)" opacity="0.7">MAIN Q</text>
+    </g>
+    <g class="node-group" data-tooltip="Main Q: projected via main attention's wq_b into 128 heads × 512-dim (448 NoPE + 64 RoPE). Used in the final FlashMLA sparse attention.">
+      <rect class="node-rect" x="1140" y="50" width="150" height="130" fill="var(--attn-bg)" stroke="var(--attn-border)" stroke-width="1"/>
+      <text class="node-step" x="1160" y="76" fill="var(--attn)" opacity="0.7">MAIN Q</text>
+      <text class="node-shape" x="1160" y="100" fill="var(--attn)">[1, 128h, 512]</text>
+      <text class="node-desc" x="1160" y="120">for attention</text>
+      <text class="node-desc" x="1160" y="136">(BF16)</text>
+    </g>
+
+    <g class="node-group" data-tooltip="Sliding Window Attention: circular buffer storing the most recent 128 raw KV vectors. Fixed size regardless of sequence length.">
+      <rect class="node-rect" x="140" y="240" width="230" height="130" fill="var(--swa-bg)" stroke="var(--swa-border)" stroke-width="1"/>
+      <text class="node-step" x="160" y="268" fill="var(--swa)" opacity="0.7">STEP 0</text>
+      <text class="node-label" x="224" y="268">SWA Cache</text>
+      <text class="node-desc" x="160" y="294">Store recent 128 raw tokens</text>
+      <text class="node-desc" x="160" y="312">in circular buffer</text>
+      <text class="node-shape" x="160" y="348" fill="var(--swa)">[128, 512-dim]</text>
+    </g>
+
+    <g class="node-group" data-tooltip="Main Compressor: overlapping gated pooling with 8-token window and stride 4. softmax(scores) · kv_states over 8 tokens (4 current + 4 overlap). Stored in main KV cache.">
+      <rect class="node-rect" x="410" y="240" width="260" height="130" fill="var(--compress-bg)" stroke="var(--compress-border)" stroke-width="1"/>
+      <text class="node-step" x="430" y="268" fill="var(--compress)" opacity="0.7">STEP 1</text>
+      <text class="node-label" x="500" y="268">Main Compressor</text>
+      <text class="node-desc" x="430" y="294">Overlapping gated pooling</text>
+      <text class="node-desc" x="430" y="312">8-token window, stride 4</text>
+      <text class="node-io" x="430" y="336">4096 tokens →</text>
+      <text class="node-shape" x="430" y="352" fill="var(--compress)">[4096/4 = 1024, 512-dim]</text>
+    </g>
+
+    <g class="node-group" data-tooltip="Indexer Compressor: separate, smaller compressor producing 128-dim representations for fast scoring. Uses FP8 or MXFP4. Only used for scoring, not final attention.">
+      <rect class="node-rect" x="710" y="240" width="260" height="130" fill="var(--indexer-bg)" stroke="var(--indexer-border)" stroke-width="1"/>
+      <text class="node-step" x="730" y="268" fill="var(--indexer)" opacity="0.7">STEP 2</text>
+      <text class="node-label" x="800" y="268">Indexer Compressor</text>
+      <text class="node-desc" x="730" y="294">Separate 128-dim compressor</text>
+      <text class="node-desc" x="730" y="312">for scoring (FP8 / MXFP4)</text>
+      <text class="node-io" x="730" y="336">4096 tokens →</text>
+      <text class="node-shape" x="730" y="352" fill="var(--indexer)">[4096/4 = 1024, 128-dim]</text>
+    </g>
+
+    <g class="node-group" data-tooltip="Indexer Scoring via DeepGEMM: Q @ K^T using fp8_fp4_mqa_logits. Low-bit operands go directly to tensor cores — acceptable because only ranking matters.">
+      <rect class="node-rect" x="750" y="470" width="240" height="120" fill="var(--indexer-bg)" stroke="var(--indexer-border)" stroke-width="1"/>
+      <text class="node-step" x="770" y="498" fill="var(--indexer)" opacity="0.7">STEP 3</text>
+      <text class="node-label" x="840" y="498">Indexer Scoring</text>
+      <text class="node-desc" x="770" y="522">DeepGEMM: Q @ Kᵀ</text>
+      <text class="node-desc" x="770" y="540">fp8 × fp8 → f32 logits</text>
+      <text class="node-shape" x="770" y="572" fill="var(--indexer)">→ logits [1, 1024]</text>
+    </g>
+
+    <g class="node-group" data-tooltip="Top-k Selection: pick 512 highest-scoring compressed positions from 1024 candidates. Output is indices into the main KV cache.">
+      <rect class="node-rect" x="750" y="640" width="240" height="110" fill="var(--indexer-bg)" stroke="var(--indexer-border)" stroke-width="1"/>
+      <text class="node-step" x="770" y="668" fill="var(--indexer)" opacity="0.7">STEP 4</text>
+      <text class="node-label" x="840" y="668">Top-k Selection</text>
+      <text class="node-desc" x="770" y="694">Select top-512 from 1024</text>
+      <text class="node-desc" x="770" y="712">compressed positions</text>
+      <text class="node-shape" x="770" y="734" fill="var(--indexer)">→ indices [1, 512]</text>
+    </g>
+
+    <g class="node-group" data-tooltip="Sparse Attention via FlashMLA: gather 512 compressed + 128 SWA = 640 KV pairs. FP8 dequantized to BF16 before tensor cores. Split-KV with warpgroup specialization.">
+      <rect class="node-rect" x="280" y="600" width="330" height="180" fill="var(--attn-bg)" stroke="var(--attn-border)" stroke-width="1"/>
+      <text class="node-step" x="310" y="628" fill="var(--attn)" opacity="0.7">STEP 5</text>
+      <text class="node-label" x="380" y="628">Sparse Attention</text>
+      <text class="node-desc" x="310" y="656">FlashMLA fused kernel</text>
+      <text class="node-desc" x="310" y="674">FP8 → BF16 dequant before tensor cores</text>
+      <line x1="310" y1="694" x2="590" y2="694" stroke="var(--border)" stroke-width="0.5"/>
+      <text class="node-io" x="310" y="714">SWA:</text>
+      <text class="node-shape" x="360" y="714" fill="var(--swa)">[128, 512]</text>
+      <text class="node-io" x="310" y="732">Compressed (gathered):</text>
+      <text class="node-shape" x="480" y="732" fill="var(--compress)">[512, 512]</text>
+      <text class="node-io" x="310" y="750">Total:</text>
+      <text class="node-shape" x="360" y="750" fill="var(--attn)">[512+128 = 640, 512] → output [1, 512]</text>
+    </g>
+
+    <g opacity="0.35">
+      <text x="1130" y="310" font-family="JetBrains Mono" font-size="9" fill="var(--text-muted)" text-anchor="end" transform="rotate(-90, 1130, 310)">512-dim (main KV)</text>
+      <text x="1160" y="310" font-family="JetBrains Mono" font-size="9" fill="var(--text-muted)" text-anchor="end" transform="rotate(-90, 1160, 310)">128-dim (indexer)</text>
+    </g>
+  </svg>
+
+  <div class="legend">
+    <div class="legend-item"><div class="legend-dot" style="background: var(--swa);"></div>SWA (local window)</div>
+    <div class="legend-item"><div class="legend-dot" style="background: var(--compress);"></div>Main Compressor (512-dim)</div>
+    <div class="legend-item"><div class="legend-dot" style="background: var(--indexer);"></div>Indexer Path (128-dim)</div>
+    <div class="legend-item"><div class="legend-dot" style="background: var(--attn);"></div>Attention Output</div>
+  </div>
+</div>
+
+<div class="tooltip" id="tooltip"></div>
+
+<script>
+  const tooltip = document.getElementById('tooltip');
+  document.querySelectorAll('.node-group[data-tooltip]').forEach(node => {
+    node.addEventListener('mouseenter', () => {
+      tooltip.innerHTML = node.getAttribute('data-tooltip');
+      tooltip.classList.add('visible');
+    });
+    node.addEventListener('mousemove', (e) => {
+      const r = tooltip.getBoundingClientRect();
+      tooltip.style.left = Math.min(e.clientX + 16, window.innerWidth - r.width - 16) + 'px';
+      tooltip.style.top = Math.min(e.clientY - 8, window.innerHeight - r.height - 16) + 'px';
+    });
+    node.addEventListener('mouseleave', () => tooltip.classList.remove('visible'));
+  });
+</script>
+</body>
+</html>

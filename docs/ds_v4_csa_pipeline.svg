@@ -1,0 +1,138 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1340 860" font-family="ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, monospace">
+  <defs>
+    <marker id="a-swa" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="none" stroke="#2563eb" stroke-width="1.5"/>
+    </marker>
+    <marker id="a-comp" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="none" stroke="#7c3aed" stroke-width="1.5"/>
+    </marker>
+    <marker id="a-idx" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="none" stroke="#059669" stroke-width="1.5"/>
+    </marker>
+    <marker id="a-attn" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="none" stroke="#d97706" stroke-width="1.5"/>
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1340" height="860" fill="#ffffff" rx="12"/>
+  <rect x="1" y="1" width="1338" height="858" fill="none" stroke="#e5e7eb" rx="12" stroke-width="1"/>
+
+  <!-- Title -->
+  <text x="60" y="52" font-size="24" font-weight="700" fill="#1a1c22">DeepSeek V4<tspan fill="#d97706">:</tspan> CSA Pipeline</text>
+  <text x="60" y="76" font-size="13" font-weight="300" fill="#8b8f9e">Compressed Sparse Attention · 4096 Token Decode</text>
+
+  <!-- ══════ CONNECTORS ══════ -->
+  <!-- Input → SWA -->
+  <path d="M 250,180 L 250,270" fill="none" stroke="#2563eb" stroke-width="1.5" stroke-dasharray="6 4" opacity="0.5" marker-end="url(#a-swa)"/>
+  <!-- Input → Main Compressor -->
+  <path d="M 530,180 L 530,270" fill="none" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="6 4" opacity="0.5" marker-end="url(#a-comp)"/>
+  <!-- Input → Indexer Compressor -->
+  <path d="M 620,165 L 770,165 L 770,270" fill="none" stroke="#059669" stroke-width="1.5" stroke-dasharray="6 4" opacity="0.5" marker-end="url(#a-idx)"/>
+  <!-- Main Compressor → FlashMLA (gather) -->
+  <path d="M 530,400 L 530,465 Q 530,480 510,480 L 350,480 Q 330,480 330,500 L 330,530 Q 330,550 350,550 L 420,550 Q 440,550 440,570 L 440,630" fill="none" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="6 4" opacity="0.5" marker-end="url(#a-comp)"/>
+  <!-- Indexer Compressor → Scoring -->
+  <path d="M 770,400 L 770,465 L 870,465 L 870,500" fill="none" stroke="#059669" stroke-width="1.5" stroke-dasharray="6 4" opacity="0.5" marker-end="url(#a-idx)"/>
+  <!-- Scoring → Top-k -->
+  <path d="M 870,620 L 870,670" fill="none" stroke="#059669" stroke-width="1.5" stroke-dasharray="6 4" opacity="0.5" marker-end="url(#a-idx)"/>
+  <!-- Top-k → FlashMLA -->
+  <path d="M 780,740 L 620,740 L 620,710 Q 620,690 600,690 L 560,690 Q 540,690 540,710 L 540,730" fill="none" stroke="#d97706" stroke-width="1.5" stroke-dasharray="6 4" opacity="0.5" marker-end="url(#a-attn)"/>
+  <!-- SWA → FlashMLA -->
+  <path d="M 250,400 L 250,530 Q 250,550 270,550 L 350,550 Q 370,550 370,570 L 370,630" fill="none" stroke="#2563eb" stroke-width="1.5" stroke-dasharray="6 4" opacity="0.5" marker-end="url(#a-swa)"/>
+  <!-- Indexer Q → Scoring -->
+  <path d="M 1050,230 L 1050,560 Q 1050,570 1040,570 L 960,570" fill="none" stroke="#059669" stroke-width="1" stroke-dasharray="3 3" opacity="0.35" marker-end="url(#a-idx)"/>
+  <!-- Main Q → FlashMLA -->
+  <path d="M 1210,230 L 1210,770 Q 1210,790 1190,790 L 600,790" fill="none" stroke="#d97706" stroke-width="1" stroke-dasharray="3 3" opacity="0.35" marker-end="url(#a-attn)"/>
+  <!-- Label -->
+  <text x="374" y="474" font-size="9" fill="#8b8f9e" font-weight="500">gather by indices</text>
+
+  <!-- ══════ INPUT ══════ -->
+  <rect x="140" y="100" width="500" height="80" rx="8" fill="rgba(79,70,229,0.06)" stroke="rgba(79,70,229,0.30)" stroke-width="1"/>
+  <text x="160" y="126" font-size="10" font-weight="700" fill="#4f46e5" opacity="0.7" letter-spacing="1.5">INPUT</text>
+  <text x="210" y="126" font-size="13" font-weight="600" fill="#1a1c22">4096 Tokens</text>
+  <text x="160" y="158" font-size="11" fill="#4f46e5">[4096, hidden_size]</text>
+  <text x="380" y="158" font-size="12" fill="#5a5e6e" font-family="system-ui, sans-serif">hidden states from transformer layer</text>
+
+  <!-- ══════ INDEXER Q ══════ -->
+  <rect x="980" y="100" width="150" height="130" rx="8" fill="rgba(5,150,105,0.06)" stroke="rgba(5,150,105,0.30)" stroke-width="1"/>
+  <text x="1000" y="126" font-size="10" font-weight="700" fill="#059669" opacity="0.7" letter-spacing="1.5">INDEXER Q</text>
+  <text x="1000" y="152" font-size="11" fill="#059669">[1, 64h, 128]</text>
+  <text x="1000" y="172" font-size="12" fill="#5a5e6e" font-family="system-ui, sans-serif">for scoring</text>
+  <text x="1000" y="190" font-size="12" fill="#5a5e6e" font-family="system-ui, sans-serif">(FP8 / MXFP4)</text>
+
+  <!-- ══════ MAIN Q ══════ -->
+  <rect x="1140" y="100" width="150" height="130" rx="8" fill="rgba(217,119,6,0.06)" stroke="rgba(217,119,6,0.30)" stroke-width="1"/>
+  <text x="1160" y="126" font-size="10" font-weight="700" fill="#d97706" opacity="0.7" letter-spacing="1.5">MAIN Q</text>
+  <text x="1160" y="152" font-size="11" fill="#d97706">[1, 128h, 512]</text>
+  <text x="1160" y="172" font-size="12" fill="#5a5e6e" font-family="system-ui, sans-serif">for attention</text>
+  <text x="1160" y="190" font-size="12" fill="#5a5e6e" font-family="system-ui, sans-serif">(BF16)</text>
+
+  <!-- ══════ STEP 0: SWA ══════ -->
+  <rect x="140" y="270" width="230" height="130" rx="8" fill="rgba(37,99,235,0.06)" stroke="rgba(37,99,235,0.30)" stroke-width="1"/>
+  <text x="160" y="298" font-size="10" font-weight="700" fill="#2563eb" opacity="0.7" letter-spacing="1.5">STEP 0</text>
+  <text x="224" y="298" font-size="13" font-weight="600" fill="#1a1c22">SWA Cache</text>
+  <text x="160" y="324" font-size="12" fill="#5a5e6e" font-family="system-ui, sans-serif">Store recent 128 raw tokens</text>
+  <text x="160" y="342" font-size="12" fill="#5a5e6e" font-family="system-ui, sans-serif">in circular buffer</text>
+  <text x="160" y="378" font-size="11" fill="#2563eb">[128, 512-dim]</text>
+
+  <!-- ══════ STEP 1: Main Compressor ══════ -->
+  <rect x="410" y="270" width="260" height="130" rx="8" fill="rgba(124,58,237,0.06)" stroke="rgba(124,58,237,0.30)" stroke-width="1"/>
+  <text x="430" y="298" font-size="10" font-weight="700" fill="#7c3aed" opacity="0.7" letter-spacing="1.5">STEP 1</text>
+  <text x="500" y="298" font-size="13" font-weight="600" fill="#1a1c22">Main Compressor</text>
+  <text x="430" y="324" font-size="12" fill="#5a5e6e" font-family="system-ui, sans-serif">Overlapping gated pooling</text>
+  <text x="430" y="342" font-size="12" fill="#5a5e6e" font-family="system-ui, sans-serif">8-token window, stride 4</text>
+  <text x="430" y="366" font-size="10" fill="#8b8f9e">4096 tokens →</text>
+  <text x="430" y="382" font-size="11" fill="#7c3aed">[4096/4 = 1024, 512-dim]</text>
+
+  <!-- ══════ STEP 2: Indexer Compressor ══════ -->
+  <rect x="710" y="270" width="260" height="130" rx="8" fill="rgba(5,150,105,0.06)" stroke="rgba(5,150,105,0.30)" stroke-width="1"/>
+  <text x="730" y="298" font-size="10" font-weight="700" fill="#059669" opacity="0.7" letter-spacing="1.5">STEP 2</text>
+  <text x="800" y="298" font-size="13" font-weight="600" fill="#1a1c22">Indexer Compressor</text>
+  <text x="730" y="324" font-size="12" fill="#5a5e6e" font-family="system-ui, sans-serif">Separate 128-dim compressor</text>
+  <text x="730" y="342" font-size="12" fill="#5a5e6e" font-family="system-ui, sans-serif">for scoring (FP8 / MXFP4)</text>
+  <text x="730" y="366" font-size="10" fill="#8b8f9e">4096 tokens →</text>
+  <text x="730" y="382" font-size="11" fill="#059669">[4096/4 = 1024, 128-dim]</text>
+
+  <!-- ══════ STEP 3: Indexer Scoring ══════ -->
+  <rect x="750" y="500" width="240" height="120" rx="8" fill="rgba(5,150,105,0.06)" stroke="rgba(5,150,105,0.30)" stroke-width="1"/>
+  <text x="770" y="528" font-size="10" font-weight="700" fill="#059669" opacity="0.7" letter-spacing="1.5">STEP 3</text>
+  <text x="840" y="528" font-size="13" font-weight="600" fill="#1a1c22">Indexer Scoring</text>
+  <text x="770" y="554" font-size="12" fill="#5a5e6e" font-family="system-ui, sans-serif">DeepGEMM: Q @ Kᵀ</text>
+  <text x="770" y="572" font-size="12" fill="#5a5e6e" font-family="system-ui, sans-serif">fp8 × fp8 → f32 logits</text>
+  <text x="770" y="602" font-size="11" fill="#059669">→ logits [1, 1024]</text>
+
+  <!-- ══════ STEP 4: Top-k ══════ -->
+  <rect x="750" y="670" width="240" height="110" rx="8" fill="rgba(5,150,105,0.06)" stroke="rgba(5,150,105,0.30)" stroke-width="1"/>
+  <text x="770" y="698" font-size="10" font-weight="700" fill="#059669" opacity="0.7" letter-spacing="1.5">STEP 4</text>
+  <text x="840" y="698" font-size="13" font-weight="600" fill="#1a1c22">Top-k Selection</text>
+  <text x="770" y="724" font-size="12" fill="#5a5e6e" font-family="system-ui, sans-serif">Select top-512 from 1024</text>
+  <text x="770" y="742" font-size="12" fill="#5a5e6e" font-family="system-ui, sans-serif">compressed positions</text>
+  <text x="770" y="764" font-size="11" fill="#059669">→ indices [1, 512]</text>
+
+  <!-- ══════ STEP 5: FlashMLA ══════ -->
+  <rect x="280" y="630" width="330" height="180" rx="8" fill="rgba(217,119,6,0.06)" stroke="rgba(217,119,6,0.30)" stroke-width="1"/>
+  <text x="310" y="658" font-size="10" font-weight="700" fill="#d97706" opacity="0.7" letter-spacing="1.5">STEP 5</text>
+  <text x="380" y="658" font-size="13" font-weight="600" fill="#1a1c22">Sparse Attention</text>
+  <text x="310" y="686" font-size="12" fill="#5a5e6e" font-family="system-ui, sans-serif">FlashMLA fused kernel</text>
+  <text x="310" y="704" font-size="12" fill="#5a5e6e" font-family="system-ui, sans-serif">FP8 → BF16 dequant before tensor cores</text>
+  <line x1="310" y1="720" x2="590" y2="720" stroke="#d4d7de" stroke-width="0.5"/>
+  <text x="310" y="740" font-size="10" fill="#8b8f9e">SWA:</text>
+  <text x="360" y="740" font-size="11" fill="#2563eb">[128, 512]</text>
+  <text x="310" y="758" font-size="10" fill="#8b8f9e">Compressed (gathered):</text>
+  <text x="480" y="758" font-size="11" fill="#7c3aed">[512, 512]</text>
+  <text x="310" y="776" font-size="10" fill="#8b8f9e">Total:</text>
+  <text x="360" y="776" font-size="11" fill="#d97706">[512+128 = 640, 512] → output [1, 512]</text>
+
+  <!-- ══════ LEGEND ══════ -->
+  <rect x="60" y="828" width="580" height="24" rx="4" fill="#f6f7f9" stroke="#e5e7eb" stroke-width="0.5"/>
+  <rect x="76" y="835" width="10" height="10" rx="2" fill="#2563eb"/>
+  <text x="92" y="844" font-size="10" fill="#5a5e6e">SWA</text>
+  <rect x="156" y="835" width="10" height="10" rx="2" fill="#7c3aed"/>
+  <text x="172" y="844" font-size="10" fill="#5a5e6e">Main Compressor</text>
+  <rect x="306" y="835" width="10" height="10" rx="2" fill="#059669"/>
+  <text x="322" y="844" font-size="10" fill="#5a5e6e">Indexer Path</text>
+  <rect x="426" y="835" width="10" height="10" rx="2" fill="#d97706"/>
+  <text x="442" y="844" font-size="10" fill="#5a5e6e">Attention</text>
+  <rect x="526" y="835" width="10" height="10" rx="2" fill="#4f46e5"/>
+  <text x="542" y="844" font-size="10" fill="#5a5e6e">Input</text>
+</svg>
