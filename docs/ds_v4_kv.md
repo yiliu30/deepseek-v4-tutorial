@@ -92,7 +92,7 @@ are nearly free.
 
 ## CSA Pipeline (4096 Token Example)
 
-[csa](./ds_v4_csa_pipeline.svg)
+![csa](./ds_v4_csa_pipeline.svg)
 
 ### Step 0: SWA Cache
 Store recent 128 raw tokens.
