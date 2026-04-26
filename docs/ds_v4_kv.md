@@ -70,9 +70,15 @@ indexer KV = 128 × 2 = **256 bytes/slot**.
 | **Total** | | **61** | | | **~9.62 GiB** |
 
 > Naive full-attention BF16 (61 layers × 1M × 1024 B) = **~61 GiB** → **6.3× savings**.
+>
+> Compared to DeepSeek V3.2 (61 layers × 1M × (1152 + 256) B = **~83.9 GiB**),
+> V4 achieves **~8.7× savings** — matching the
+> [vLLM blog](https://vllm.ai/blog/deepseek-v4). The extra savings over naive
+> come from V3.2 caching 576 elements (512 NoPE + 64 RoPE) per token per layer,
+> while V4's compression means most layers don't store all tokens.
 
 > **Note**: vLLM actually stores the KV cache in FP8 with a mixed layout:
-> 448B FP8 NoPE + 128B BF16 RoPE + 7B UE8M0 scales + 1B pad = **576 bytes/slot**
+> 448B FP8 NoPE + 128B BF16 RoPE + 7B UE8M0 scales + 1B pad = **584 bytes/slot**
 > for main KV, and 128B FP8 + 4B FP32 scale = **132 bytes/slot** for indexer KV.
 > This reduces the total from ~9.62 GiB to **~5.39 GiB** at 1M tokens.
 > (See `deepseek_v4_attention.py` lines 428–433 and 1972–1976.)
@@ -82,11 +88,11 @@ indexer KV = 128 × 2 = **256 bytes/slot**.
 ```
 C4A main KV ████████████████████████████████████ 78.0%  (30 × 1M/4 × 512×2 = 7.50 GiB)
 C4A indexer ██████████          19.5%  (30 × 1M/4 × 128×2 = 1.88 GiB)
-C128A       ██                   2.6%  (31 × 1M/128 × 512×2 = 0.25 GiB)
+C128A       ██                   2.5%  (31 × 1M/128 × 512×2 = 0.25 GiB)
 SWA         ▏                    0.1%  ((30+31) × 128 × 512×2 = 0.008 GiB)
 ```
 
-**Takeaway**: C4A dominates the budget (~97%). The indexer adds ~20% overhead
+**Takeaway**: C4A dominates the budget (~97%). The indexer adds ~25% overhead
 on top of C4A main KV — the cost of learned sparse selection. C128A and SWA
 are nearly free.
 
