@@ -26,7 +26,7 @@ The `sparse_attn` kernel allocates all 64 attention heads × 512 dims in shared 
 ### KV Cache
 - [DeepSeek V4 KV Design](./docs/ds_v4_kv.md)
 
-![csa](./ds_v4_csa_pipeline.svg)
+![csa](./docs/ds_v4_csa_pipeline.svg)
 
 ### Modelling
 - [Run DeepSeek V4 Flash on consumer GPUs](./docs/run_ds_flash.md)
