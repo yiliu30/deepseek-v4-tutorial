@@ -1,0 +1,664 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>C4A: How Compressor + Indexer Produce Top-512</title>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'JetBrains Mono', monospace;
+            background: #0d1117;
+            color: #c9d1d9;
+            padding: 20px;
+        }
+        .container { max-width: 1200px; margin: 0 auto; }
+        h1 { color: #58a6ff; text-align: center; font-size: 1.5em; margin-bottom: 4px; }
+        .subtitle { text-align: center; color: #8b949e; font-size: 0.85em; margin-bottom: 20px; }
+
+        .step {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 10px;
+            margin-bottom: 16px;
+            overflow: hidden;
+            transition: border-color 0.2s;
+        }
+        .step:hover { border-color: #58a6ff44; }
+        .step-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 14px 20px;
+            background: #21262d;
+            cursor: default;
+        }
+        .step-num {
+            width: 28px; height: 28px;
+            border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            font-weight: 700; font-size: 0.85em;
+            flex-shrink: 0;
+        }
+        .step-title { font-weight: 600; font-size: 0.95em; }
+        .step-file { color: #8b949e; font-size: 0.75em; margin-left: auto; }
+        .step-body { padding: 16px 20px; display: flex; gap: 20px; align-items: flex-start; }
+        .step-text { flex: 1; font-size: 0.82em; line-height: 1.7; min-width: 0; }
+        .step-viz { flex-shrink: 0; }
+        .step-viz svg { border-radius: 6px; border: 1px solid #21262d; background: #0d1117; }
+
+        code {
+            background: #0d1117;
+            padding: 1px 5px;
+            border-radius: 3px;
+            color: #79c0ff;
+            font-size: 0.95em;
+        }
+        .hl { color: #f0883e; font-weight: 600; }
+        .purple { color: #a371f7; }
+        .green { color: #7ee787; }
+        .blue { color: #58a6ff; }
+        .gold { color: #e6c07b; }
+        .red { color: #f78166; }
+        .dim { color: #6e7681; }
+
+        .final-box {
+            background: #161b22;
+            border: 2px solid #a371f7;
+            border-radius: 10px;
+            padding: 20px;
+            margin-top: 12px;
+        }
+        .final-box h2 { color: #a371f7; font-size: 1em; margin-bottom: 12px; }
+
+        .arrow-label {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 9px;
+            fill: #8b949e;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>C4A Layer: From 4097 Tokens to Top-512</h1>
+    <p class="subtitle">How the compressor and indexer work together · Query at position 4096</p>
+
+    <!-- ═══════════════════ STEP 0: Setup ═══════════════════ -->
+    <div class="step">
+        <div class="step-header">
+            <div class="step-num" style="background:#58a6ff;color:#0d1117;">0</div>
+            <div class="step-title">Projection: hidden_states → five outputs per token</div>
+            <div class="step-file">deepseek_v4_attention.py:494, :2015</div>
+        </div>
+        <div class="step-body">
+            <div class="step-text">
+                Every token <code>i</code> (0–4096) passes through <b>three</b> linear projections that
+                run <b>before</b> the compressor/indexer stage:
+                <br><br>
+                <b>①</b> <code>fused_wqa_wkv(hidden_states)</code> → split into <span class="blue">qr</span> (query route)
+                and <span class="red">kv</span> (shared key-value latent, 512-dim)
+                <br>
+                <b>②</b> Main compressor: <code>compressor.fused_wkv_wgate(hidden_states)</code> →
+                <span class="purple">Ca</span> (kv, 1024-dim) and <span class="purple">Za</span> (gating score, 1024-dim)
+                <br>
+                <b>③</b> Indexer's compressor: <code>indexer.compressor.fused_wkv_wgate(hidden_states)</code> →
+                <span class="green">Cb</span> (kv, 256-dim) and <span class="green">Zb</span> (gating score, 256-dim)
+                <br><br>
+                <span class="dim">Why two compressors? The main one (②) produces 512-dim entries for the actual
+                attention. The indexer's (③) produces lightweight 128-dim entries just for the
+                scoring/selection step — 4× cheaper to dot-product against.</span>
+            </div>
+            <div class="step-viz">
+                <svg width="320" height="180" viewBox="0 0 320 180">
+                    <rect x="100" y="10" width="120" height="28" rx="5" fill="#30363d"/>
+                    <text x="160" y="28" text-anchor="middle" fill="#c9d1d9" font-size="10" font-weight="600" font-family="JetBrains Mono">hidden_states[i]</text>
+
+                    <!-- Three arrows down -->
+                    <line x1="110" y1="38" x2="60" y2="68" stroke="#58a6ff80" stroke-width="1.5" marker-end="url(#a0)"/>
+                    <line x1="160" y1="38" x2="160" y2="68" stroke="#a371f780" stroke-width="1.5" marker-end="url(#a1)"/>
+                    <line x1="210" y1="38" x2="260" y2="68" stroke="#7ee78780" stroke-width="1.5" marker-end="url(#a2)"/>
+
+                    <!-- Projection boxes -->
+                    <rect x="10" y="70" width="100" height="24" rx="4" fill="#21262d" stroke="#58a6ff" stroke-width="1"/>
+                    <text x="60" y="86" text-anchor="middle" fill="#58a6ff" font-size="8" font-weight="600" font-family="JetBrains Mono">fused_wqa_wkv</text>
+                    <rect x="115" y="70" width="90" height="24" rx="4" fill="#21262d" stroke="#a371f7" stroke-width="1"/>
+                    <text x="160" y="86" text-anchor="middle" fill="#a371f7" font-size="8" font-weight="600" font-family="JetBrains Mono">main compress</text>
+                    <rect x="215" y="70" width="95" height="24" rx="4" fill="#21262d" stroke="#7ee787" stroke-width="1"/>
+                    <text x="262" y="86" text-anchor="middle" fill="#7ee787" font-size="8" font-weight="600" font-family="JetBrains Mono">idx compress</text>
+
+                    <!-- Outputs -->
+                    <line x1="40" y1="94" x2="40" y2="114" stroke="#58a6ff60" stroke-width="1" marker-end="url(#a0)"/>
+                    <line x1="80" y1="94" x2="80" y2="114" stroke="#f7816660" stroke-width="1" marker-end="url(#a3)"/>
+                    <rect x="16" y="116" width="48" height="20" rx="3" fill="#58a6ff33" stroke="#58a6ff" stroke-width="0.5"/>
+                    <text x="40" y="129" text-anchor="middle" fill="#58a6ff" font-size="8" font-weight="600" font-family="JetBrains Mono">qr</text>
+                    <rect x="56" y="116" width="48" height="20" rx="3" fill="#f7816633" stroke="#f78166" stroke-width="0.5"/>
+                    <text x="80" y="129" text-anchor="middle" fill="#f78166" font-size="8" font-weight="600" font-family="JetBrains Mono">kv 512d</text>
+
+                    <line x1="140" y1="94" x2="140" y2="114" stroke="#a371f760" stroke-width="1" marker-end="url(#a1)"/>
+                    <line x1="180" y1="94" x2="180" y2="114" stroke="#a371f760" stroke-width="1" marker-end="url(#a1)"/>
+                    <rect x="118" y="116" width="44" height="20" rx="3" fill="#a371f733" stroke="#a371f7" stroke-width="0.5"/>
+                    <text x="140" y="129" text-anchor="middle" fill="#a371f7" font-size="8" font-weight="600" font-family="JetBrains Mono">Ca</text>
+                    <rect x="164" y="116" width="32" height="20" rx="3" fill="#a371f733" stroke="#a371f7" stroke-width="0.5"/>
+                    <text x="180" y="129" text-anchor="middle" fill="#a371f7" font-size="8" font-weight="600" font-family="JetBrains Mono">Za</text>
+
+                    <line x1="242" y1="94" x2="242" y2="114" stroke="#7ee78760" stroke-width="1" marker-end="url(#a2)"/>
+                    <line x1="282" y1="94" x2="282" y2="114" stroke="#7ee78760" stroke-width="1" marker-end="url(#a2)"/>
+                    <rect x="220" y="116" width="44" height="20" rx="3" fill="#7ee78733" stroke="#7ee787" stroke-width="0.5"/>
+                    <text x="242" y="129" text-anchor="middle" fill="#7ee787" font-size="8" font-weight="600" font-family="JetBrains Mono">Cb</text>
+                    <rect x="266" y="116" width="32" height="20" rx="3" fill="#7ee78733" stroke="#7ee787" stroke-width="0.5"/>
+                    <text x="282" y="129" text-anchor="middle" fill="#7ee787" font-size="8" font-weight="600" font-family="JetBrains Mono">Zb</text>
+
+                    <text x="40" y="152" text-anchor="middle" fill="#6e7681" font-size="7" font-family="JetBrains Mono">→ SWA cache</text>
+                    <text x="160" y="152" text-anchor="middle" fill="#6e7681" font-size="7" font-family="JetBrains Mono">→ main KV cache</text>
+                    <text x="262" y="152" text-anchor="middle" fill="#6e7681" font-size="7" font-family="JetBrains Mono">→ indexer KV cache</text>
+
+                    <text x="40" y="164" text-anchor="middle" fill="#6e7681" font-size="7" font-family="JetBrains Mono">(uncompressed)</text>
+                    <text x="160" y="164" text-anchor="middle" fill="#6e7681" font-size="7" font-family="JetBrains Mono">(512d, compressed)</text>
+                    <text x="262" y="164" text-anchor="middle" fill="#6e7681" font-size="7" font-family="JetBrains Mono">(128d, compressed)</text>
+
+                    <defs>
+                        <marker id="a0" markerWidth="5" markerHeight="5" refX="4" refY="2.5" orient="auto"><polygon points="0 0,5 2.5,0 5" fill="#58a6ff"/></marker>
+                        <marker id="a1" markerWidth="5" markerHeight="5" refX="4" refY="2.5" orient="auto"><polygon points="0 0,5 2.5,0 5" fill="#a371f7"/></marker>
+                        <marker id="a2" markerWidth="5" markerHeight="5" refX="4" refY="2.5" orient="auto"><polygon points="0 0,5 2.5,0 5" fill="#7ee787"/></marker>
+                        <marker id="a3" markerWidth="5" markerHeight="5" refX="4" refY="2.5" orient="auto"><polygon points="0 0,5 2.5,0 5" fill="#f78166"/></marker>
+                    </defs>
+                </svg>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════════════ STEP 1: Main Compressor ═══════════════════ -->
+    <div class="step">
+        <div class="step-header">
+            <div class="step-num" style="background:#a371f7;color:#0d1117;">1</div>
+            <div class="step-title">Main Compressor: 4097 tokens → 1024 compressed entries (512-dim)</div>
+            <div class="step-file">deepseek_compressor.py:272</div>
+        </div>
+        <div class="step-body">
+            <div class="step-text">
+                The main compressor processes <span class="purple">Ca</span> and <span class="purple">Za</span>
+                from all 4097 tokens. It uses an <b>overlapping window of 8</b> with <b>stride 4</b>:
+                <br><br>
+                <b>Kernel 1</b> (<code>_save_partial_states_kernel</code>): For each token, saves to the
+                rolling state cache:
+                <br>
+                &nbsp;&nbsp;• <code>kv_state = Ca</code>
+                <br>
+                &nbsp;&nbsp;• <code>score_state = Za + APE[position % 4]</code>
+                <br><br>
+                <b>Kernel 2</b> (<code>_fused_compress_norm_rope_insert</code>): At every 4th position
+                (compression boundary), reads 8 states from the rolling cache and produces one entry:
+                <br><br>
+                <code>C_j = Σ softmax(score_states) · kv_states</code>
+                <br>
+                <code>&nbsp;&nbsp;&nbsp;→ RMSNorm → RoPE(pos=4j) → FP8 quant</code>
+                <br>
+                <code>&nbsp;&nbsp;&nbsp;→ write to main KV cache (512-dim)</code>
+                <br><br>
+                With 4097 tokens: <code>floor(4097/4) = <span class="hl">1024</span></code> compressed entries
+                are produced (C₀ through C₁₀₂₃).
+                <br><br>
+                <span class="dim">These are the entries that the query will eventually attend to —
+                but 1024 is too many for efficient attention, so the indexer selects the best 512.</span>
+            </div>
+            <div class="step-viz">
+                <svg width="320" height="220" viewBox="0 0 320 220">
+                    <!-- Token stream -->
+                    <text x="160" y="16" text-anchor="middle" fill="#8b949e" font-size="9" font-weight="600" font-family="JetBrains Mono">4097 tokens (Ca, Za per token)</text>
+                    <g>
+                        <!-- Token boxes -->
+                        <rect x="10" y="24" width="14" height="18" rx="2" fill="#a371f7" opacity="0.6"/>
+                        <rect x="26" y="24" width="14" height="18" rx="2" fill="#a371f7" opacity="0.6"/>
+                        <rect x="42" y="24" width="14" height="18" rx="2" fill="#a371f7" opacity="0.6"/>
+                        <rect x="58" y="24" width="14" height="18" rx="2" fill="#a371f7" opacity="0.8"/>
+                        <rect x="78" y="24" width="14" height="18" rx="2" fill="#a371f7" opacity="0.6"/>
+                        <rect x="94" y="24" width="14" height="18" rx="2" fill="#a371f7" opacity="0.6"/>
+                        <rect x="110" y="24" width="14" height="18" rx="2" fill="#a371f7" opacity="0.6"/>
+                        <rect x="126" y="24" width="14" height="18" rx="2" fill="#a371f7" opacity="0.8"/>
+                        <text x="150" y="37" fill="#6e7681" font-size="11" font-family="JetBrains Mono">···</text>
+                        <rect x="170" y="24" width="14" height="18" rx="2" fill="#a371f7" opacity="0.6"/>
+                        <rect x="186" y="24" width="14" height="18" rx="2" fill="#a371f7" opacity="0.6"/>
+                        <rect x="202" y="24" width="14" height="18" rx="2" fill="#a371f7" opacity="0.6"/>
+                        <rect x="218" y="24" width="14" height="18" rx="2" fill="#a371f7" opacity="0.8"/>
+                        <text x="244" y="37" fill="#6e7681" font-size="11" font-family="JetBrains Mono">···</text>
+                        <rect x="264" y="24" width="14" height="18" rx="2" fill="#a371f7" opacity="0.6"/>
+                        <rect x="280" y="24" width="14" height="18" rx="2" fill="#a371f7" opacity="0.6"/>
+                        <rect x="296" y="24" width="14" height="18" rx="2" fill="#a371f7" opacity="0.6"/>
+                        <!-- Labels -->
+                        <text x="17" y="55" text-anchor="middle" fill="#6e7681" font-size="7" font-family="JetBrains Mono">0</text>
+                        <text x="33" y="55" text-anchor="middle" fill="#6e7681" font-size="7" font-family="JetBrains Mono">1</text>
+                        <text x="49" y="55" text-anchor="middle" fill="#6e7681" font-size="7" font-family="JetBrains Mono">2</text>
+                        <text x="65" y="55" text-anchor="middle" fill="#a371f7" font-size="7" font-weight="700" font-family="JetBrains Mono">3</text>
+                        <text x="85" y="55" text-anchor="middle" fill="#6e7681" font-size="7" font-family="JetBrains Mono">4</text>
+                        <text x="101" y="55" text-anchor="middle" fill="#6e7681" font-size="7" font-family="JetBrains Mono">5</text>
+                        <text x="117" y="55" text-anchor="middle" fill="#6e7681" font-size="7" font-family="JetBrains Mono">6</text>
+                        <text x="133" y="55" text-anchor="middle" fill="#a371f7" font-size="7" font-weight="700" font-family="JetBrains Mono">7</text>
+                    </g>
+                    <!-- Windows -->
+                    <rect x="8" y="22" width="72" height="22" rx="3" fill="none" stroke="#a371f7" stroke-width="1.5" stroke-dasharray="3 2"/>
+                    <text x="44" y="62" text-anchor="middle" fill="#a371f7" font-size="7" font-family="JetBrains Mono">window 0–3</text>
+                    <rect x="8" y="22" width="140" height="22" rx="3" fill="none" stroke="#ffd93d" stroke-width="1" stroke-dasharray="3 2" opacity="0.4"/>
+
+                    <rect x="76" y="22" width="72" height="22" rx="3" fill="none" stroke="#a371f7" stroke-width="1.5" stroke-dasharray="3 2"/>
+                    <text x="112" y="62" text-anchor="middle" fill="#a371f7" font-size="7" font-family="JetBrains Mono">window 4–7</text>
+
+                    <!-- Arrows to compressed -->
+                    <line x1="44" y1="68" x2="44" y2="88" stroke="#a371f760" stroke-width="1" marker-end="url(#a1)"/>
+                    <line x1="112" y1="68" x2="112" y2="88" stroke="#a371f760" stroke-width="1" marker-end="url(#a1)"/>
+                    <line x1="225" y1="68" x2="225" y2="88" stroke="#a371f760" stroke-width="1" marker-end="url(#a1)"/>
+
+                    <!-- Compressed entries -->
+                    <text x="160" y="104" text-anchor="middle" fill="#8b949e" font-size="9" font-weight="600" font-family="JetBrains Mono">1024 compressed entries (main KV cache, 512-dim each)</text>
+                    <rect x="20" y="112" width="26" height="22" rx="3" fill="#a371f7"/>
+                    <text x="33" y="127" text-anchor="middle" fill="#fff" font-size="8" font-weight="600" font-family="JetBrains Mono">C₀</text>
+                    <rect x="50" y="112" width="26" height="22" rx="3" fill="#a371f7"/>
+                    <text x="63" y="127" text-anchor="middle" fill="#fff" font-size="8" font-weight="600" font-family="JetBrains Mono">C₁</text>
+                    <rect x="80" y="112" width="26" height="22" rx="3" fill="#a371f7"/>
+                    <text x="93" y="127" text-anchor="middle" fill="#fff" font-size="8" font-weight="600" font-family="JetBrains Mono">C₂</text>
+                    <text x="125" y="127" fill="#6e7681" font-size="11" font-family="JetBrains Mono">···</text>
+                    <rect x="145" y="112" width="40" height="22" rx="3" fill="#a371f7"/>
+                    <text x="165" y="127" text-anchor="middle" fill="#fff" font-size="7" font-weight="600" font-family="JetBrains Mono">C₁₀₂₃</text>
+                    <text x="33" y="148" text-anchor="middle" fill="#79c0ff" font-size="7" font-family="JetBrains Mono">RoPE:0</text>
+                    <text x="63" y="148" text-anchor="middle" fill="#79c0ff" font-size="7" font-family="JetBrains Mono">RoPE:4</text>
+                    <text x="93" y="148" text-anchor="middle" fill="#79c0ff" font-size="7" font-family="JetBrains Mono">RoPE:8</text>
+                    <text x="165" y="148" text-anchor="middle" fill="#79c0ff" font-size="7" font-family="JetBrains Mono">RoPE:4092</text>
+
+                    <!-- Formula -->
+                    <text x="160" y="172" text-anchor="middle" fill="#c9d1d9" font-size="8" font-family="JetBrains Mono">C_j = Σ softmax(Za + APE) · Ca</text>
+                    <text x="160" y="186" text-anchor="middle" fill="#8b949e" font-size="7.5" font-family="JetBrains Mono">over 8-token overlapping window, stride 4</text>
+                    <text x="160" y="200" text-anchor="middle" fill="#8b949e" font-size="7.5" font-family="JetBrains Mono">→ RMSNorm → RoPE → FP8 → paged KV cache</text>
+                </svg>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════════════ STEP 2: Indexer Compressor ═══════════════════ -->
+    <div class="step">
+        <div class="step-header">
+            <div class="step-num" style="background:#7ee787;color:#0d1117;">2</div>
+            <div class="step-title">Indexer Compressor: 4097 tokens → 1024 lightweight entries (128-dim)</div>
+            <div class="step-file">deepseek_v4_attention.py:1984, deepseek_compressor.py</div>
+        </div>
+        <div class="step-body">
+            <div class="step-text">
+                <b>In parallel</b> with Step 1 (on a different CUDA stream), the indexer's own
+                compressor does the exact same compression — but into a <b>much smaller</b> cache:
+                <br><br>
+                &nbsp;&nbsp;• Same 8-token window, stride 4
+                <br>
+                &nbsp;&nbsp;• Same softmax-weighted sum formula
+                <br>
+                &nbsp;&nbsp;• But output is <span class="green">128-dim</span> (vs 512-dim for main cache)
+                <br>
+                &nbsp;&nbsp;• Uses FP8 or <span class="hl">MXFP4</span> quantization (configurable)
+                <br><br>
+                This produces <span class="green">1024 indexer entries</span> (same count as main cache,
+                just smaller). These exist <b>solely for scoring</b> — they are never used for the
+                actual attention computation.
+                <br><br>
+                <span class="dim">Why a separate cache? Dot-producting a 64-head query against 1024 entries
+                of 128-dim is 4× cheaper than against 512-dim entries. The indexer trades accuracy
+                for speed: it only needs to <i>rank</i> entries, not produce the final output.</span>
+            </div>
+            <div class="step-viz">
+                <svg width="320" height="130" viewBox="0 0 320 130">
+                    <text x="160" y="14" text-anchor="middle" fill="#8b949e" font-size="9" font-weight="600" font-family="JetBrains Mono">Same compression, smaller output</text>
+                    <!-- Indexer entries -->
+                    <rect x="20" y="30" width="22" height="18" rx="3" fill="#7ee787"/>
+                    <text x="31" y="43" text-anchor="middle" fill="#0d1117" font-size="7" font-weight="700" font-family="JetBrains Mono">C₀'</text>
+                    <rect x="46" y="30" width="22" height="18" rx="3" fill="#7ee787"/>
+                    <text x="57" y="43" text-anchor="middle" fill="#0d1117" font-size="7" font-weight="700" font-family="JetBrains Mono">C₁'</text>
+                    <rect x="72" y="30" width="22" height="18" rx="3" fill="#7ee787"/>
+                    <text x="83" y="43" text-anchor="middle" fill="#0d1117" font-size="7" font-weight="700" font-family="JetBrains Mono">C₂'</text>
+                    <text x="110" y="43" fill="#6e7681" font-size="11" font-family="JetBrains Mono">···</text>
+                    <rect x="130" y="30" width="38" height="18" rx="3" fill="#7ee787"/>
+                    <text x="149" y="43" text-anchor="middle" fill="#0d1117" font-size="7" font-weight="700" font-family="JetBrains Mono">C₁₀₂₃'</text>
+                    <text x="220" y="43" text-anchor="start" fill="#7ee787" font-size="8" font-family="JetBrains Mono">128-dim each</text>
+                    <text x="220" y="57" text-anchor="start" fill="#6e7681" font-size="8" font-family="JetBrains Mono">(FP8 or MXFP4)</text>
+
+                    <!-- Comparison -->
+                    <rect x="20" y="75" width="280" height="40" rx="5" fill="#21262d"/>
+                    <text x="30" y="92" fill="#a371f7" font-size="8" font-weight="600" font-family="JetBrains Mono">Main cache: 1024 × 512-dim → for attention</text>
+                    <text x="30" y="108" fill="#7ee787" font-size="8" font-weight="600" font-family="JetBrains Mono">Idx cache:  1024 × 128-dim → for scoring only</text>
+                </svg>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════════════ STEP 3: Indexer Scoring ═══════════════════ -->
+    <div class="step">
+        <div class="step-header">
+            <div class="step-num" style="background:#ffd93d;color:#0d1117;">3</div>
+            <div class="step-title">Indexer Scoring: q × indexer_cache → 1024 scores per head</div>
+            <div class="step-file">sparse_attn_indexer.py:308 (decode), :221 (prefill)</div>
+        </div>
+        <div class="step-body">
+            <div class="step-text">
+                Now we need to score how relevant each of the 1024 compressed entries is
+                to query token 4096. The indexer builds a <b>per-head score vector</b>:
+                <br><br>
+                <b>① Query prep</b> (<code>fused_indexer_q_rope_quant</code>):
+                <br>
+                &nbsp;&nbsp;• <code>q = indexer.wq_b(qr)</code> → <span class="green">64 heads × 128-dim</span>
+                <br>
+                &nbsp;&nbsp;• Apply RoPE (position 4096), quantize to FP8/FP4
+                <br>
+                &nbsp;&nbsp;• Scale by <code>softmax_scale</code> and <code>weights_proj(hidden_states)</code>
+                <br><br>
+                <b>② Paged MQA logits</b> (DeepGEMM <code>fp8_fp4_paged_mqa_logits</code>):
+                <br>
+                &nbsp;&nbsp;• Batched dot product: <span class="green">q[64 heads, 128d]</span> × <span class="green">indexer_cache[1024 entries, 128d]</span>
+                <br>
+                &nbsp;&nbsp;• Output: <code>logits[64 heads, 1024]</code> — one score per entry per head
+                <br>
+                &nbsp;&nbsp;• Reads from the <b>paged</b> indexer KV cache (block_table lookup)
+                <br><br>
+                <span class="dim">The <code>weights_proj</code> per-head scalar weights let different heads
+                emphasize different aspects of relevance. The 64 indexer heads don't map 1:1
+                to the main attention's heads — they're a separate, cheaper scoring mechanism.</span>
+            </div>
+            <div class="step-viz">
+                <svg width="320" height="180" viewBox="0 0 320 180">
+                    <!-- Q -->
+                    <rect x="20" y="10" width="80" height="30" rx="5" fill="#58a6ff33" stroke="#58a6ff" stroke-width="1"/>
+                    <text x="60" y="22" text-anchor="middle" fill="#58a6ff" font-size="8" font-weight="600" font-family="JetBrains Mono">q₄₀₉₆</text>
+                    <text x="60" y="34" text-anchor="middle" fill="#6e7681" font-size="7" font-family="JetBrains Mono">64h × 128d</text>
+
+                    <!-- × -->
+                    <text x="115" y="30" text-anchor="middle" fill="#ffd93d" font-size="16" font-weight="700" font-family="JetBrains Mono">×</text>
+
+                    <!-- Indexer cache -->
+                    <rect x="135" y="10" width="100" height="30" rx="5" fill="#7ee78733" stroke="#7ee787" stroke-width="1"/>
+                    <text x="185" y="22" text-anchor="middle" fill="#7ee787" font-size="8" font-weight="600" font-family="JetBrains Mono">indexer cache</text>
+                    <text x="185" y="34" text-anchor="middle" fill="#6e7681" font-size="7" font-family="JetBrains Mono">1024 × 128d</text>
+
+                    <!-- Arrow -->
+                    <text x="255" y="30" text-anchor="middle" fill="#6e7681" font-size="14" font-family="JetBrains Mono">=</text>
+
+                    <!-- Logits -->
+                    <rect x="270" y="10" width="40" height="30" rx="5" fill="#ffd93d33" stroke="#ffd93d" stroke-width="1"/>
+                    <text x="290" y="22" text-anchor="middle" fill="#ffd93d" font-size="8" font-weight="600" font-family="JetBrains Mono">logits</text>
+                    <text x="290" y="34" text-anchor="middle" fill="#6e7681" font-size="7" font-family="JetBrains Mono">64×1024</text>
+
+                    <!-- Logits heatmap visualization -->
+                    <text x="160" y="64" text-anchor="middle" fill="#8b949e" font-size="8" font-weight="600" font-family="JetBrains Mono">logits heatmap (64 heads × 1024 entries)</text>
+                    <rect x="20" y="72" width="280" height="60" rx="4" fill="#21262d"/>
+                    <!-- Simulated heatmap rows -->
+                    <g opacity="0.8">
+                        <rect x="22" y="74" width="276" height="3" rx="1" fill="#ffd93d11"/>
+                        <rect x="22" y="74" width="40" height="3" rx="1" fill="#ffd93d66"/>
+                        <rect x="100" y="74" width="30" height="3" rx="1" fill="#ffd93d44"/>
+                        <rect x="200" y="74" width="50" height="3" rx="1" fill="#ffd93daa"/>
+
+                        <rect x="22" y="80" width="276" height="3" rx="1" fill="#ffd93d11"/>
+                        <rect x="50" y="80" width="60" height="3" rx="1" fill="#ffd93d77"/>
+                        <rect x="180" y="80" width="40" height="3" rx="1" fill="#ffd93d55"/>
+
+                        <rect x="22" y="86" width="276" height="3" rx="1" fill="#ffd93d11"/>
+                        <rect x="22" y="86" width="80" height="3" rx="1" fill="#ffd93d55"/>
+                        <rect x="240" y="86" width="56" height="3" rx="1" fill="#ffd93d88"/>
+                    </g>
+                    <text x="24" y="98" fill="#6e7681" font-size="6" font-family="JetBrains Mono">head 0</text>
+                    <text x="24" y="104" fill="#6e7681" font-size="6" font-family="JetBrains Mono">head 1</text>
+                    <text x="24" y="110" fill="#6e7681" font-size="6" font-family="JetBrains Mono">head 2</text>
+                    <text x="24" y="120" fill="#6e7681" font-size="6" font-family="JetBrains Mono">···</text>
+                    <text x="24" y="130" fill="#6e7681" font-size="6" font-family="JetBrains Mono">head 63</text>
+                    <text x="300" y="90" text-anchor="end" fill="#6e7681" font-size="6" font-family="JetBrains Mono">C₀</text>
+                    <text x="300" y="130" text-anchor="end" fill="#6e7681" font-size="6" font-family="JetBrains Mono">C₁₀₂₃</text>
+
+                    <text x="160" y="155" text-anchor="middle" fill="#c9d1d9" font-size="8" font-weight="600" font-family="JetBrains Mono">DeepGEMM fp8_fp4_paged_mqa_logits</text>
+                    <text x="160" y="170" text-anchor="middle" fill="#8b949e" font-size="7.5" font-family="JetBrains Mono">Reads indexer KV cache via block_table (paged)</text>
+                </svg>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════════════ STEP 4: Top-k ═══════════════════ -->
+    <div class="step">
+        <div class="step-header">
+            <div class="step-num" style="background:#f78166;color:#0d1117;">4</div>
+            <div class="step-title">Top-512 Selection: 1024 scores → 512 winner indices</div>
+            <div class="step-file">sparse_attn_indexer.py:326 (persistent_topk), :347 (top_k_per_row)</div>
+        </div>
+        <div class="step-body">
+            <div class="step-text">
+                The logits matrix (64 heads × 1024 entries) is reduced to <span class="hl">512 entry
+                indices</span> via a top-k kernel:
+                <br><br>
+                <b>Decode:</b> <code>persistent_topk</code> (CUDA radix-sort, used when topk ∈ {512, 2048})
+                <br>
+                <b>Prefill:</b> <code>top_k_per_row_prefill</code> (respects per-token causal seq_lens)
+                <br><br>
+                The selected indices are written into <code>topk_indices_buffer</code>:
+                <br>
+                &nbsp;&nbsp;<code>topk_indices_buffer[token_4096] = [j₁, j₂, ..., j₅₁₂]</code>
+                <br><br>
+                These are <b>local</b> indices (0–1023) within the request's compressed pool.
+                <br><br>
+                <span class="dim">The buffer is shared across all C4A layers. Each layer's indexer
+                overwrites it, and the main attention reads immediately after.
+                The scores aggregate across all 64 heads before top-k — the model
+                selects entries that are globally important, not per-head.</span>
+            </div>
+            <div class="step-viz">
+                <svg width="320" height="150" viewBox="0 0 320 150">
+                    <!-- Input -->
+                    <rect x="20" y="10" width="120" height="26" rx="5" fill="#ffd93d33" stroke="#ffd93d" stroke-width="1"/>
+                    <text x="80" y="27" text-anchor="middle" fill="#ffd93d" font-size="8" font-weight="600" font-family="JetBrains Mono">logits [64h × 1024]</text>
+
+                    <!-- Arrow -->
+                    <line x1="145" y1="23" x2="175" y2="23" stroke="#f7816680" stroke-width="1.5" marker-end="url(#a3)"/>
+                    <text x="160" y="16" text-anchor="middle" fill="#f78166" font-size="7" font-weight="600" font-family="JetBrains Mono">top-512</text>
+
+                    <!-- Output -->
+                    <rect x="180" y="10" width="130" height="26" rx="5" fill="#f7816633" stroke="#f78166" stroke-width="1"/>
+                    <text x="245" y="27" text-anchor="middle" fill="#f78166" font-size="8" font-weight="600" font-family="JetBrains Mono">indices [512]</text>
+
+                    <!-- Visualization of selection -->
+                    <text x="160" y="56" text-anchor="middle" fill="#8b949e" font-size="8" font-weight="600" font-family="JetBrains Mono">1024 entries → 512 selected (example)</text>
+
+                    <g transform="translate(20, 66)">
+                        <!-- 1024 entry slots as thin bars -->
+                        <rect x="0" y="0" width="280" height="30" rx="4" fill="#21262d"/>
+                        <!-- Selected entries (scattered) -->
+                        <rect x="3" y="2" width="3" height="26" rx="1" fill="#a371f7" opacity="0.8"/>
+                        <rect x="9" y="2" width="3" height="26" rx="1" fill="#a371f7" opacity="0.8"/>
+                        <rect x="18" y="2" width="3" height="26" rx="1" fill="#a371f7" opacity="0.8"/>
+                        <rect x="30" y="2" width="3" height="26" rx="1" fill="#a371f7" opacity="0.8"/>
+                        <rect x="35" y="2" width="3" height="26" rx="1" fill="#a371f7" opacity="0.8"/>
+                        <rect x="48" y="2" width="3" height="26" rx="1" fill="#a371f7" opacity="0.8"/>
+                        <rect x="60" y="2" width="3" height="26" rx="1" fill="#a371f7" opacity="0.8"/>
+                        <rect x="80" y="2" width="3" height="26" rx="1" fill="#a371f7" opacity="0.8"/>
+                        <rect x="90" y="2" width="3" height="26" rx="1" fill="#a371f7" opacity="0.8"/>
+                        <rect x="105" y="2" width="3" height="26" rx="1" fill="#a371f7" opacity="0.8"/>
+                        <rect x="120" y="2" width="3" height="26" rx="1" fill="#a371f7" opacity="0.8"/>
+                        <rect x="140" y="2" width="3" height="26" rx="1" fill="#a371f7" opacity="0.8"/>
+                        <rect x="155" y="2" width="3" height="26" rx="1" fill="#a371f7" opacity="0.8"/>
+                        <rect x="165" y="2" width="3" height="26" rx="1" fill="#a371f7" opacity="0.8"/>
+                        <rect x="180" y="2" width="3" height="26" rx="1" fill="#a371f7" opacity="0.8"/>
+                        <rect x="200" y="2" width="3" height="26" rx="1" fill="#a371f7" opacity="0.8"/>
+                        <rect x="215" y="2" width="3" height="26" rx="1" fill="#a371f7" opacity="0.8"/>
+                        <rect x="230" y="2" width="3" height="26" rx="1" fill="#a371f7" opacity="0.8"/>
+                        <rect x="250" y="2" width="3" height="26" rx="1" fill="#a371f7" opacity="0.8"/>
+                        <rect x="270" y="2" width="3" height="26" rx="1" fill="#a371f7" opacity="0.8"/>
+                    </g>
+
+                    <text x="20" y="110" fill="#6e7681" font-size="7" font-family="JetBrains Mono">C₀</text>
+                    <text x="293" y="110" text-anchor="end" fill="#6e7681" font-size="7" font-family="JetBrains Mono">C₁₀₂₃</text>
+                    <text x="160" y="110" text-anchor="middle" fill="#a371f7" font-size="7" font-weight="600" font-family="JetBrains Mono">purple = selected (512 of 1024)</text>
+
+                    <text x="160" y="130" text-anchor="middle" fill="#c9d1d9" font-size="8" font-family="JetBrains Mono">→ topk_indices_buffer[4096] = [j₁, j₂, ..., j₅₁₂]</text>
+                    <text x="160" y="144" text-anchor="middle" fill="#8b949e" font-size="7" font-family="JetBrains Mono">local indices (0–1023) within this request's compressed pool</text>
+                </svg>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════════════ STEP 5: Main Attention ═══════════════════ -->
+    <div class="step">
+        <div class="step-header">
+            <div class="step-num" style="background:#39d353;color:#0d1117;">5</div>
+            <div class="step-title">Main Attention: q × {top-512 from main cache + 128 SWA} → output</div>
+            <div class="step-file">deepseek_v4_attention.py:1689</div>
+        </div>
+        <div class="step-body">
+            <div class="step-text">
+                The local indices from Step 4 are translated to global KV cache slot IDs
+                via <code>compute_global_topk_indices_and_lens</code> (block-table lookup).
+                <br><br>
+                Then <b>FlashMLA</b> runs a <b>single fused kernel</b> that computes attention
+                over <b>three</b> sources simultaneously:
+                <br><br>
+                <b>①</b> <span class="purple">Compressed sparse</span>: query (all main-attention heads, 512-dim)
+                × top-512 entries from the <b>main</b> KV cache (512-dim, FP8)
+                <br>
+                <b>②</b> <span class="blue">SWA</span>: query × 128 most recent uncompressed k(v) tokens (512-dim, FP8)
+                <br>
+                <b>③</b> <span class="gold">Sink</span>: per-head attention bias (loaded from weights)
+                <br><br>
+                Results are merged via <b>log-sum-exp</b> inside the kernel — no separate
+                merge step needed.
+                <br><br>
+                <span class="dim">Key point: the indexer's 128-dim cache was only for scoring. The actual
+                attention uses the <b>main</b> 512-dim cache. The indexer just tells the kernel
+                <i>which</i> 512 entries to read from the main cache.</span>
+            </div>
+            <div class="step-viz">
+                <svg width="320" height="200" viewBox="0 0 320 200">
+                    <!-- Query -->
+                    <rect x="120" y="5" width="80" height="26" rx="5" fill="#f78166" stroke="#f78166" stroke-width="1"/>
+                    <text x="160" y="22" text-anchor="middle" fill="#fff" font-size="9" font-weight="700" font-family="JetBrains Mono">q₄₀₉₆</text>
+
+                    <!-- Three branches -->
+                    <line x1="135" y1="31" x2="60" y2="58" stroke="#a371f760" stroke-width="1.5"/>
+                    <line x1="160" y1="31" x2="160" y2="58" stroke="#58a6ff60" stroke-width="1.5"/>
+                    <line x1="185" y1="31" x2="260" y2="58" stroke="#e6c07b60" stroke-width="1.5"/>
+
+                    <!-- Compressed (from main cache!) -->
+                    <rect x="10" y="60" width="100" height="36" rx="5" fill="#a371f733" stroke="#a371f7" stroke-width="1"/>
+                    <text x="60" y="75" text-anchor="middle" fill="#a371f7" font-size="8" font-weight="600" font-family="JetBrains Mono">top-512 from</text>
+                    <text x="60" y="88" text-anchor="middle" fill="#a371f7" font-size="8" font-weight="600" font-family="JetBrains Mono">MAIN cache 512d</text>
+
+                    <!-- SWA -->
+                    <rect x="120" y="60" width="80" height="36" rx="5" fill="#58a6ff33" stroke="#58a6ff" stroke-width="1"/>
+                    <text x="160" y="75" text-anchor="middle" fill="#58a6ff" font-size="8" font-weight="600" font-family="JetBrains Mono">128 SWA k(v)</text>
+                    <text x="160" y="88" text-anchor="middle" fill="#58a6ff" font-size="8" font-weight="600" font-family="JetBrains Mono">uncompressed</text>
+
+                    <!-- Sink -->
+                    <rect x="215" y="60" width="90" height="36" rx="5" fill="#e6c07b33" stroke="#e6c07b" stroke-width="1"/>
+                    <text x="260" y="75" text-anchor="middle" fill="#e6c07b" font-size="8" font-weight="600" font-family="JetBrains Mono">attention sink</text>
+                    <text x="260" y="88" text-anchor="middle" fill="#e6c07b" font-size="8" font-weight="600" font-family="JetBrains Mono">per-head bias</text>
+
+                    <!-- FlashMLA box -->
+                    <rect x="30" y="115" width="260" height="32" rx="6" fill="#39d35322" stroke="#39d353" stroke-width="1.5"/>
+                    <text x="160" y="135" text-anchor="middle" fill="#39d353" font-size="10" font-weight="700" font-family="JetBrains Mono">flash_mla_with_kvcache</text>
+
+                    <line x1="60" y1="96" x2="100" y2="115" stroke="#a371f740" stroke-width="1"/>
+                    <line x1="160" y1="96" x2="160" y2="115" stroke="#58a6ff40" stroke-width="1"/>
+                    <line x1="260" y1="96" x2="220" y2="115" stroke="#e6c07b40" stroke-width="1"/>
+
+                    <!-- Output -->
+                    <line x1="160" y1="147" x2="160" y2="165" stroke="#39d35360" stroke-width="1.5" marker-end="url(#a4)"/>
+                    <rect x="100" y="167" width="120" height="24" rx="5" fill="#39d35333" stroke="#39d353" stroke-width="1"/>
+                    <text x="160" y="183" text-anchor="middle" fill="#39d353" font-size="9" font-weight="600" font-family="JetBrains Mono">attention output</text>
+
+                    <defs>
+                        <marker id="a4" markerWidth="5" markerHeight="5" refX="4" refY="2.5" orient="auto"><polygon points="0 0,5 2.5,0 5" fill="#39d353"/></marker>
+                    </defs>
+                </svg>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════════════ FINAL SUMMARY ═══════════════════ -->
+    <div class="final-box">
+        <h2>Complete Pipeline at a Glance</h2>
+        <svg width="100%" height="280" viewBox="0 0 1150 280" style="border-radius:8px; background:#0d1117;">
+            <!-- Step labels -->
+            <text x="90" y="20" text-anchor="middle" fill="#8b949e" font-size="10" font-weight="600" font-family="JetBrains Mono">STEP 0</text>
+            <text x="300" y="20" text-anchor="middle" fill="#8b949e" font-size="10" font-weight="600" font-family="JetBrains Mono">STEPS 1–2 (parallel)</text>
+            <text x="560" y="20" text-anchor="middle" fill="#8b949e" font-size="10" font-weight="600" font-family="JetBrains Mono">STEP 3</text>
+            <text x="750" y="20" text-anchor="middle" fill="#8b949e" font-size="10" font-weight="600" font-family="JetBrains Mono">STEP 4</text>
+            <text x="980" y="20" text-anchor="middle" fill="#8b949e" font-size="10" font-weight="600" font-family="JetBrains Mono">STEP 5</text>
+
+            <!-- Hidden states -->
+            <rect x="30" y="70" width="120" height="30" rx="5" fill="#30363d"/>
+            <text x="90" y="89" text-anchor="middle" fill="#c9d1d9" font-size="9" font-weight="600" font-family="JetBrains Mono">4097 tokens</text>
+
+            <!-- Split arrows -->
+            <line x1="150" y1="75" x2="195" y2="55" stroke="#a371f760" stroke-width="1.5" marker-end="url(#af1)"/>
+            <line x1="150" y1="95" x2="195" y2="115" stroke="#7ee78760" stroke-width="1.5" marker-end="url(#af2)"/>
+            <line x1="150" y1="85" x2="195" y2="165" stroke="#58a6ff60" stroke-width="1.5"/>
+
+            <!-- Main compressor -->
+            <rect x="200" y="35" width="140" height="36" rx="5" fill="#a371f722" stroke="#a371f7" stroke-width="1"/>
+            <text x="270" y="50" text-anchor="middle" fill="#a371f7" font-size="8" font-weight="600" font-family="JetBrains Mono">Main Compressor</text>
+            <text x="270" y="63" text-anchor="middle" fill="#6e7681" font-size="7" font-family="JetBrains Mono">Ca,Za → 1024 × 512d</text>
+
+            <!-- Indexer compressor -->
+            <rect x="200" y="95" width="140" height="36" rx="5" fill="#7ee78722" stroke="#7ee787" stroke-width="1"/>
+            <text x="270" y="110" text-anchor="middle" fill="#7ee787" font-size="8" font-weight="600" font-family="JetBrains Mono">Indexer Compressor</text>
+            <text x="270" y="123" text-anchor="middle" fill="#6e7681" font-size="7" font-family="JetBrains Mono">Cb,Zb → 1024 × 128d</text>
+
+            <!-- SWA -->
+            <rect x="200" y="150" width="140" height="30" rx="5" fill="#58a6ff22" stroke="#58a6ff" stroke-width="1"/>
+            <text x="270" y="169" text-anchor="middle" fill="#58a6ff" font-size="8" font-weight="600" font-family="JetBrains Mono">SWA KV Insert (128)</text>
+
+            <!-- Arrows to scoring -->
+            <line x1="340" y1="113" x2="440" y2="80" stroke="#7ee78740" stroke-width="1.5" marker-end="url(#af2)"/>
+            <!-- Q arrow -->
+            <rect x="400" y="35" width="70" height="24" rx="4" fill="#58a6ff22" stroke="#58a6ff" stroke-width="0.5"/>
+            <text x="435" y="51" text-anchor="middle" fill="#58a6ff" font-size="8" font-weight="600" font-family="JetBrains Mono">q₄₀₉₆</text>
+            <line x1="435" y1="59" x2="490" y2="72" stroke="#58a6ff40" stroke-width="1" marker-end="url(#af0)"/>
+
+            <!-- Scoring -->
+            <rect x="445" y="64" width="130" height="36" rx="5" fill="#ffd93d22" stroke="#ffd93d" stroke-width="1"/>
+            <text x="510" y="79" text-anchor="middle" fill="#ffd93d" font-size="8" font-weight="600" font-family="JetBrains Mono">q × indexer_cache</text>
+            <text x="510" y="92" text-anchor="middle" fill="#6e7681" font-size="7" font-family="JetBrains Mono">→ logits [64h × 1024]</text>
+
+            <!-- Arrow to top-k -->
+            <line x1="575" y1="82" x2="660" y2="82" stroke="#f7816660" stroke-width="1.5" marker-end="url(#af3)"/>
+
+            <!-- Top-k -->
+            <rect x="665" y="64" width="100" height="36" rx="5" fill="#f7816622" stroke="#f78166" stroke-width="1"/>
+            <text x="715" y="79" text-anchor="middle" fill="#f78166" font-size="8" font-weight="600" font-family="JetBrains Mono">Top-512</text>
+            <text x="715" y="92" text-anchor="middle" fill="#6e7681" font-size="7" font-family="JetBrains Mono">→ 512 indices</text>
+
+            <!-- Arrow pointing to main cache -->
+            <path d="M 765 82 L 820 82 L 820 53 L 340 53 L 380 53" stroke="#a371f740" stroke-width="1" fill="none" stroke-dasharray="4 2"/>
+            <text x="590" y="48" text-anchor="middle" fill="#a371f7" font-size="7" font-style="italic" font-family="JetBrains Mono">indices select from main cache</text>
+
+            <!-- Final attention -->
+            <line x1="765" y1="82" x2="855" y2="120" stroke="#39d35360" stroke-width="1.5"/>
+            <line x1="340" y1="53" x2="855" y2="110" stroke="#a371f720" stroke-width="1" stroke-dasharray="3 2"/>
+            <line x1="340" y1="165" x2="855" y2="140" stroke="#58a6ff20" stroke-width="1" stroke-dasharray="3 2"/>
+
+            <rect x="860" y="100" width="180" height="50" rx="6" fill="#39d35322" stroke="#39d353" stroke-width="1.5"/>
+            <text x="950" y="118" text-anchor="middle" fill="#39d353" font-size="9" font-weight="700" font-family="JetBrains Mono">flash_mla_with_kvcache</text>
+            <text x="950" y="132" text-anchor="middle" fill="#6e7681" font-size="7" font-family="JetBrains Mono">512 compressed + 128 SWA + sink</text>
+            <text x="950" y="144" text-anchor="middle" fill="#6e7681" font-size="7" font-family="JetBrains Mono">merged via log-sum-exp</text>
+
+            <!-- Output -->
+            <line x1="950" y1="150" x2="950" y2="175" stroke="#39d35360" stroke-width="1.5" marker-end="url(#af4)"/>
+            <rect x="890" y="180" width="120" height="24" rx="5" fill="#39d35333" stroke="#39d353" stroke-width="1"/>
+            <text x="950" y="196" text-anchor="middle" fill="#39d353" font-size="9" font-weight="600" font-family="JetBrains Mono">output → inv_RoPE</text>
+
+            <!-- Stream labels -->
+            <rect x="188" y="215" width="560" height="50" rx="6" fill="#21262d"/>
+            <text x="350" y="234" text-anchor="middle" fill="#f78166" font-size="8" font-weight="600" font-family="JetBrains Mono">DEFAULT STREAM: indexer (steps 2→3→4)</text>
+            <text x="350" y="250" text-anchor="middle" fill="#58a6ff" font-size="8" font-weight="600" font-family="JetBrains Mono">AUX STREAM: main compressor + SWA insert (steps 1)</text>
+            <text x="350" y="262" text-anchor="middle" fill="#6e7681" font-size="7" font-family="JetBrains Mono">synchronized before step 5</text>
+
+            <defs>
+                <marker id="af0" markerWidth="5" markerHeight="5" refX="4" refY="2.5" orient="auto"><polygon points="0 0,5 2.5,0 5" fill="#58a6ff"/></marker>
+                <marker id="af1" markerWidth="5" markerHeight="5" refX="4" refY="2.5" orient="auto"><polygon points="0 0,5 2.5,0 5" fill="#a371f7"/></marker>
+                <marker id="af2" markerWidth="5" markerHeight="5" refX="4" refY="2.5" orient="auto"><polygon points="0 0,5 2.5,0 5" fill="#7ee787"/></marker>
+                <marker id="af3" markerWidth="5" markerHeight="5" refX="4" refY="2.5" orient="auto"><polygon points="0 0,5 2.5,0 5" fill="#f78166"/></marker>
+                <marker id="af4" markerWidth="5" markerHeight="5" refX="4" refY="2.5" orient="auto"><polygon points="0 0,5 2.5,0 5" fill="#39d353"/></marker>
+            </defs>
+        </svg>
+    </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DeepSeek V4: How Token 4096 Attends — All Layer Types</title>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'JetBrains Mono', 'Fira Code', monospace;
+            background: #0d1117;
+            min-height: 100vh;
+            padding: 24px;
+            color: #c9d1d9;
+        }
+        .container {
+            max-width: 1500px;
+            margin: 0 auto;
+        }
+        h1 {
+            text-align: center;
+            color: #58a6ff;
+            margin-bottom: 6px;
+            font-size: 1.6em;
+            font-weight: 600;
+        }
+        .subtitle {
+            text-align: center;
+            color: #8b949e;
+            margin-bottom: 20px;
+            font-size: 0.9em;
+        }
+        .math-box {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 10px;
+            padding: 20px 24px;
+            margin-bottom: 20px;
+            line-height: 1.8;
+            font-size: 0.85em;
+        }
+        .math-box h3 {
+            color: #58a6ff;
+            margin-bottom: 10px;
+            font-size: 1em;
+        }
+        .math-box code {
+            background: #0d1117;
+            padding: 2px 6px;
+            border-radius: 4px;
+            color: #79c0ff;
+        }
+        .highlight { color: #f0883e; font-weight: 600; }
+        .green { color: #7ee787; }
+        .blue { color: #58a6ff; }
+        .purple { color: #a371f7; }
+        .gold { color: #e6c07b; }
+
+        .panels {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 16px;
+            margin-bottom: 20px;
+        }
+        .panel {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 10px;
+            padding: 16px;
+            position: relative;
+        }
+        .panel h2 {
+            font-size: 1em;
+            margin-bottom: 4px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .panel .desc {
+            color: #8b949e;
+            font-size: 0.78em;
+            margin-bottom: 12px;
+            line-height: 1.5;
+        }
+        .panel svg {
+            width: 100%;
+            border-radius: 6px;
+            background: #0d1117;
+            border: 1px solid #21262d;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.7em;
+            font-weight: 700;
+            color: #0d1117;
+        }
+        .badge-c4a { background: #a371f7; }
+        .badge-c128a { background: #7ee787; }
+        .badge-swa { background: #f78166; }
+
+        .summary-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 16px;
+            font-size: 0.82em;
+        }
+        .summary-table th {
+            background: #21262d;
+            padding: 8px 12px;
+            text-align: left;
+            color: #58a6ff;
+            border-bottom: 1px solid #30363d;
+        }
+        .summary-table td {
+            padding: 8px 12px;
+            border-bottom: 1px solid #21262d;
+        }
+        .summary-table tr:hover { background: #161b2288; }
+
+        .legend {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 20px;
+            margin-top: 16px;
+            padding: 12px;
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            font-size: 0.82em;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .legend-swatch {
+            width: 16px;
+            height: 16px;
+            border-radius: 3px;
+        }
+
+        .timeline {
+            position: relative;
+            height: 14px;
+            background: #21262d;
+            border-radius: 7px;
+            margin: 8px 0;
+            overflow: hidden;
+        }
+        .timeline-seg {
+            position: absolute;
+            top: 0;
+            height: 100%;
+            border-radius: 7px;
+        }
+
+        .tok-count {
+            font-size: 1.3em;
+            font-weight: 700;
+        }
+        .tok-label {
+            font-size: 0.72em;
+            color: #8b949e;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>How Token 4096 Attends to Previous Tokens</h1>
+    <p class="subtitle">DeepSeek V4 · 4097 tokens in context · Query at position 4096</p>
+
+    <!-- Math derivation box -->
+    <div class="math-box">
+        <h3>Setup & Key Numbers</h3>
+        <p>
+            A sequence of <span class="highlight">4097 tokens</span> (positions 0–4096).
+            The query is the last token at position <code>i = 4096</code>.
+            All three layer types share a <span class="blue">sliding window of 128</span> uncompressed tokens.
+        </p>
+        <p style="margin-top:8px;">
+            <b>C4A layers</b> (~30 layers): compress ratio = 4, stride = 4, window = 8 tokens, top-k = 512<br>
+            <b>C128A layers</b> (~31 layers): compress ratio = 128, stride = 128, window = 128 tokens, top-k = 8192<br>
+            <b>SWA-only layers</b> (if any): no compression, only sliding window
+        </p>
+    </div>
+
+    <!-- Three panels -->
+    <div class="panels">
+        <!-- Panel 1: C4A -->
+        <div class="panel">
+            <h2><span class="badge badge-c4a">C4A</span> Compress-4 Attention</h2>
+            <div class="desc">
+                Compressed pool: <code>floor((4096+1)/4) = 1024</code> entries.<br>
+                Causal filter: <code>4j + 3 ≤ 4096 → j ≤ 1023</code> → <span class="highlight">1024</span> valid.<br>
+                Indexer selects <span class="purple">top-512</span> from 1024.
+            </div>
+            <svg id="svg-c4a" viewBox="0 0 440 340"></svg>
+            <div style="margin-top:12px; display:flex; justify-content:space-around; text-align:center;">
+                <div><span class="tok-count blue">128</span><br><span class="tok-label">SWA tokens</span></div>
+                <div><span class="tok-count purple">512</span><br><span class="tok-label">compressed (top-k)</span></div>
+                <div><span class="tok-count gold">1</span><br><span class="tok-label">sink</span></div>
+            </div>
+            <div class="timeline">
+                <div class="timeline-seg" style="left:0; width:94.1%; background:#a371f733;" title="Compressed pool covers pos 0–4095"></div>
+                <div class="timeline-seg" style="right:0; width:3.1%; background:#58a6ff;" title="SWA covers pos 3969–4096"></div>
+            </div>
+            <div style="display:flex; justify-content:space-between; font-size:0.7em; color:#6e7681;">
+                <span>pos 0</span>
+                <span>← 512 of 1024 compressed →</span>
+                <span>← SWA 128 →</span>
+                <span>4096</span>
+            </div>
+        </div>
+
+        <!-- Panel 2: C128A -->
+        <div class="panel">
+            <h2><span class="badge badge-c128a">C128A</span> Compress-128 Attention</h2>
+            <div class="desc">
+                Compressed pool: <code>floor((4096+1)/128) = 32</code> entries.<br>
+                Causal filter: <code>128j + 127 ≤ 4096 → j ≤ 31</code> → <span class="highlight">32</span> valid.<br>
+                32 &lt; 8192, so <span class="green">full attention</span> (no top-k needed).
+            </div>
+            <svg id="svg-c128a" viewBox="0 0 440 340"></svg>
+            <div style="margin-top:12px; display:flex; justify-content:space-around; text-align:center;">
+                <div><span class="tok-count blue">128</span><br><span class="tok-label">SWA tokens</span></div>
+                <div><span class="tok-count green">32</span><br><span class="tok-label">compressed (all)</span></div>
+                <div><span class="tok-count gold">1</span><br><span class="tok-label">sink</span></div>
+            </div>
+            <div class="timeline">
+                <div class="timeline-seg" style="left:0; width:94.1%; background:#7ee78733;" title="Compressed pool covers pos 0–4095"></div>
+                <div class="timeline-seg" style="right:0; width:3.1%; background:#58a6ff;" title="SWA covers pos 3969–4096"></div>
+            </div>
+            <div style="display:flex; justify-content:space-between; font-size:0.7em; color:#6e7681;">
+                <span>pos 0</span>
+                <span>← all 32 compressed →</span>
+                <span>← SWA 128 →</span>
+                <span>4096</span>
+            </div>
+        </div>
+
+        <!-- Panel 3: SWA-only -->
+        <div class="panel">
+            <h2><span class="badge badge-swa">SWA</span> Sliding Window Only</h2>
+            <div class="desc">
+                No compression. Only attends to the <span class="highlight">128</span> most recent
+                uncompressed tokens (positions 3969–4096).<br>
+                Used for layers with <code>compress_ratio = 1</code>.
+            </div>
+            <svg id="svg-swa" viewBox="0 0 440 340"></svg>
+            <div style="margin-top:12px; display:flex; justify-content:space-around; text-align:center;">
+                <div><span class="tok-count blue">128</span><br><span class="tok-label">SWA tokens</span></div>
+                <div><span class="tok-count" style="color:#6e7681;">0</span><br><span class="tok-label">compressed</span></div>
+                <div><span class="tok-count gold">1</span><br><span class="tok-label">sink</span></div>
+            </div>
+            <div class="timeline">
+                <div class="timeline-seg" style="left:0; width:96.9%; background:#21262d;" title="Not attended"></div>
+                <div class="timeline-seg" style="right:0; width:3.1%; background:#58a6ff;" title="SWA covers pos 3969–4096"></div>
+            </div>
+            <div style="display:flex; justify-content:space-between; font-size:0.7em; color:#6e7681;">
+                <span>pos 0</span>
+                <span style="color:#f78166;">← blind zone (3969 tokens) →</span>
+                <span>← SWA 128 →</span>
+                <span>4096</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Summary table -->
+    <div class="math-box">
+        <h3>Summary: What Token 4096 Sees</h3>
+        <table class="summary-table">
+            <thead>
+                <tr>
+                    <th>Layer Type</th>
+                    <th>SWA Tokens</th>
+                    <th>Compressed Pool</th>
+                    <th>Actually Attended</th>
+                    <th>Original Positions Covered</th>
+                    <th>Effective Coverage</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><span class="badge badge-c4a">C4A</span></td>
+                    <td class="blue">128</td>
+                    <td>1024 entries</td>
+                    <td class="purple">top-512 (sparse)</td>
+                    <td>512 × 8 = ~4096 original tokens (overlapping)</td>
+                    <td class="highlight">≈100% (via sparse selection)</td>
+                </tr>
+                <tr>
+                    <td><span class="badge badge-c128a">C128A</span></td>
+                    <td class="blue">128</td>
+                    <td>32 entries</td>
+                    <td class="green">all 32 (full attn)</td>
+                    <td>32 × 128 = 4096 original tokens</td>
+                    <td class="highlight">100%</td>
+                </tr>
+                <tr>
+                    <td><span class="badge badge-swa">SWA-only</span></td>
+                    <td class="blue">128</td>
+                    <td>—</td>
+                    <td>—</td>
+                    <td>128 tokens (positions 3969–4096)</td>
+                    <td style="color:#f78166;">3.1%</td>
+                </tr>
+            </tbody>
+        </table>
+        <p style="margin-top:12px; font-size:0.85em; color:#8b949e;">
+            At <b>1M context</b>, C4A has ~250k compressed entries → top-512 selected;
+            C128A has ~8k entries → all attended (8k < top-k limit of 8192).
+            SWA always sees 128 tokens regardless of context length.
+        </p>
+    </div>
+
+    <div class="legend">
+        <div class="legend-item"><div class="legend-swatch" style="background:#58a6ff;"></div> SWA (uncompressed k(v))</div>
+        <div class="legend-item"><div class="legend-swatch" style="background:#a371f7;"></div> C4A compressed (top-512)</div>
+        <div class="legend-item"><div class="legend-swatch" style="background:#7ee787;"></div> C128A compressed (full)</div>
+        <div class="legend-item"><div class="legend-swatch" style="background:#e6c07b;"></div> Attention sink</div>
+        <div class="legend-item"><div class="legend-swatch" style="background:#f78166;"></div> Query token (pos 4096)</div>
+        <div class="legend-item"><div class="legend-swatch" style="background:#21262d; border:1px solid #30363d;"></div> Not attended</div>
+    </div>
+</div>
+
+<script>
+const NS = 'http://www.w3.org/2000/svg';
+
+function el(tag, attrs, parent) {
+    const e = document.createElementNS(NS, tag);
+    for (const [k, v] of Object.entries(attrs || {})) e.setAttribute(k, v);
+    if (parent) parent.appendChild(e);
+    return e;
+}
+
+function drawC4A() {
+    const svg = document.getElementById('svg-c4a');
+    const W = 440, H = 340;
+    const cx = W / 2, topY = 40;
+
+    // Query token
+    el('circle', { cx, cy: topY, r: 18, fill: '#f78166', stroke: '#f78166', 'stroke-width': 2 }, svg);
+    el('text', { x: cx, y: topY, 'text-anchor': 'middle', 'dominant-baseline': 'middle',
+        fill: '#fff', 'font-size': '10', 'font-weight': '700', 'font-family': 'JetBrains Mono' }, svg).textContent = 'q₄₀₉₆';
+
+    // --- SWA section ---
+    const swaY = 110;
+    const swaW = 120, swaH = 28;
+    const swaX = cx + 80;
+    el('rect', { x: swaX - swaW/2, y: swaY - swaH/2, width: swaW, height: swaH, rx: 6, fill: '#58a6ff' }, svg);
+    el('text', { x: swaX, y: swaY, 'text-anchor': 'middle', 'dominant-baseline': 'middle',
+        fill: '#fff', 'font-size': '9', 'font-weight': '600', 'font-family': 'JetBrains Mono' }, svg).textContent = '128 k(v) tokens';
+    el('text', { x: swaX, y: swaY + 22, 'text-anchor': 'middle', fill: '#6e7681', 'font-size': '8',
+        'font-family': 'JetBrains Mono' }, svg).textContent = 'pos 3969–4096';
+    // Arrow q → SWA
+    el('line', { x1: cx + 10, y1: topY + 18, x2: swaX - 20, y2: swaY - swaH/2, stroke: '#58a6ff80', 'stroke-width': 1.5,
+        'marker-end': 'url(#arr-blue-c4a)' }, svg);
+
+    // --- Compressed section ---
+    const compY = 110;
+    const compW = 160, compH = 28;
+    const compX = cx - 70;
+
+    // Pool background (1024 entries)
+    el('rect', { x: compX - compW/2 - 10, y: compY - compH/2 - 8, width: compW + 20, height: compH + 40, rx: 8,
+        fill: '#21262d', stroke: '#30363d', 'stroke-width': 1 }, svg);
+    el('text', { x: compX, y: compY - compH/2 - 14 + 4, 'text-anchor': 'middle', fill: '#6e7681', 'font-size': '8',
+        'font-family': 'JetBrains Mono' }, svg).textContent = '1024 compressed entries (pool)';
+
+    // Top-512 highlighted
+    el('rect', { x: compX - compW/2, y: compY - compH/2, width: compW * 0.5, height: compH, rx: 5, fill: '#a371f7' }, svg);
+    el('text', { x: compX - compW/4, y: compY, 'text-anchor': 'middle', 'dominant-baseline': 'middle',
+        fill: '#fff', 'font-size': '9', 'font-weight': '600', 'font-family': 'JetBrains Mono' }, svg).textContent = 'top-512';
+
+    // Remaining 512 dimmed
+    el('rect', { x: compX - compW/2 + compW * 0.5, y: compY - compH/2, width: compW * 0.5, height: compH, rx: 5,
+        fill: '#a371f722', stroke: '#a371f744', 'stroke-width': 1 }, svg);
+    el('text', { x: compX + compW/4, y: compY, 'text-anchor': 'middle', 'dominant-baseline': 'middle',
+        fill: '#6e7681', 'font-size': '8', 'font-family': 'JetBrains Mono' }, svg).textContent = '512 not selected';
+
+    // Indexer label
+    el('text', { x: compX, y: compY + compH/2 + 14, 'text-anchor': 'middle', fill: '#a371f7', 'font-size': '8',
+        'font-family': 'JetBrains Mono' }, svg).textContent = '← indexer selects top-512 →';
+
+    // Arrow q → compressed
+    el('line', { x1: cx - 10, y1: topY + 18, x2: compX + 20, y2: compY - compH/2, stroke: '#a371f780', 'stroke-width': 1.5,
+        'marker-end': 'url(#arr-purple-c4a)' }, svg);
+
+    // --- Sink ---
+    const sinkY = topY;
+    const sinkX = cx + 160;
+    el('rect', { x: sinkX - 16, y: sinkY - 12, width: 32, height: 24, rx: 5, fill: '#e6c07b' }, svg);
+    el('text', { x: sinkX, y: sinkY, 'text-anchor': 'middle', 'dominant-baseline': 'middle',
+        fill: '#0d1117', 'font-size': '8', 'font-weight': '700', 'font-family': 'JetBrains Mono' }, svg).textContent = 'sink';
+    el('line', { x1: cx + 18, y1: topY, x2: sinkX - 16, y2: sinkY, stroke: '#e6c07b80', 'stroke-width': 1.5,
+        'marker-end': 'url(#arr-gold-c4a)' }, svg);
+
+    // --- Show the original tokens covered ---
+    const origY = 200;
+    el('text', { x: W/2, y: origY, 'text-anchor': 'middle', fill: '#8b949e', 'font-size': '9',
+        'font-weight': '600', 'font-family': 'JetBrains Mono' }, svg).textContent = 'Original token positions 0–4096';
+
+    // Full bar
+    const barX = 30, barW = W - 60, barY = origY + 16, barH = 20;
+    el('rect', { x: barX, y: barY, width: barW, height: barH, rx: 4, fill: '#21262d' }, svg);
+
+    // Compressed region (0–4095 approximately)
+    const compFrac = 4096 / 4097;
+    // Show top-512 as scattered highlights (use stripes)
+    for (let i = 0; i < 32; i++) {
+        const sx = barX + (i / 32) * barW * compFrac;
+        const sw = (barW * compFrac) / 32 * 0.6;
+        el('rect', { x: sx, y: barY, width: sw, height: barH, fill: '#a371f744' }, svg);
+    }
+
+    // SWA region
+    const swaFrac = 128 / 4097;
+    el('rect', { x: barX + barW * (1 - swaFrac), y: barY, width: barW * swaFrac, height: barH, rx: 4, fill: '#58a6ff' }, svg);
+
+    // Labels
+    el('text', { x: barX + barW * 0.4, y: barY + barH + 14, 'text-anchor': 'middle', fill: '#a371f7',
+        'font-size': '8', 'font-family': 'JetBrains Mono' }, svg).textContent = 'sparse compressed (512 of 1024)';
+    el('text', { x: barX + barW - 20, y: barY + barH + 14, 'text-anchor': 'middle', fill: '#58a6ff',
+        'font-size': '8', 'font-family': 'JetBrains Mono' }, svg).textContent = 'SWA';
+
+    // Overlap note
+    el('text', { x: W/2, y: barY + barH + 30, 'text-anchor': 'middle', fill: '#6e7681', 'font-size': '7.5',
+        'font-family': 'JetBrains Mono' }, svg).textContent = 'SWA and compressed regions may overlap near position ~3969';
+
+    // Key formula
+    const formulaY = 290;
+    el('text', { x: W/2, y: formulaY, 'text-anchor': 'middle', fill: '#c9d1d9', 'font-size': '9',
+        'font-weight': '600', 'font-family': 'JetBrains Mono' }, svg).textContent = 'Causality: attend to C_j where 4j + 3 ≤ 4096';
+    el('text', { x: W/2, y: formulaY + 16, 'text-anchor': 'middle', fill: '#8b949e', 'font-size': '8',
+        'font-family': 'JetBrains Mono' }, svg).textContent = '→ j ≤ 1023 → 1024 valid entries → indexer picks 512';
+
+    // Markers
+    const defs = el('defs', {}, svg);
+    [['arr-blue-c4a', '#58a6ff'], ['arr-purple-c4a', '#a371f7'], ['arr-gold-c4a', '#e6c07b']].forEach(([id, color]) => {
+        const m = el('marker', { id, markerWidth: 6, markerHeight: 6, refX: 5, refY: 3, orient: 'auto' }, defs);
+        el('polygon', { points: '0 0, 6 3, 0 6', fill: color }, m);
+    });
+}
+
+function drawC128A() {
+    const svg = document.getElementById('svg-c128a');
+    const W = 440, H = 340;
+    const cx = W / 2, topY = 40;
+
+    // Query
+    el('circle', { cx, cy: topY, r: 18, fill: '#f78166', stroke: '#f78166', 'stroke-width': 2 }, svg);
+    el('text', { x: cx, y: topY, 'text-anchor': 'middle', 'dominant-baseline': 'middle',
+        fill: '#fff', 'font-size': '10', 'font-weight': '700', 'font-family': 'JetBrains Mono' }, svg).textContent = 'q₄₀₉₆';
+
+    // SWA
+    const swaY = 110;
+    const swaW = 120, swaH = 28;
+    const swaX = cx + 80;
+    el('rect', { x: swaX - swaW/2, y: swaY - swaH/2, width: swaW, height: swaH, rx: 6, fill: '#58a6ff' }, svg);
+    el('text', { x: swaX, y: swaY, 'text-anchor': 'middle', 'dominant-baseline': 'middle',
+        fill: '#fff', 'font-size': '9', 'font-weight': '600', 'font-family': 'JetBrains Mono' }, svg).textContent = '128 k(v) tokens';
+    el('text', { x: swaX, y: swaY + 22, 'text-anchor': 'middle', fill: '#6e7681', 'font-size': '8',
+        'font-family': 'JetBrains Mono' }, svg).textContent = 'pos 3969–4096';
+    el('line', { x1: cx + 10, y1: topY + 18, x2: swaX - 20, y2: swaY - swaH/2, stroke: '#58a6ff80', 'stroke-width': 1.5,
+        'marker-end': 'url(#arr-blue-c128a)' }, svg);
+
+    // Compressed (all 32)
+    const compY = 110;
+    const compW = 140, compH = 28;
+    const compX = cx - 70;
+    el('rect', { x: compX - compW/2, y: compY - compH/2, width: compW, height: compH, rx: 6, fill: '#7ee787' }, svg);
+    el('text', { x: compX, y: compY, 'text-anchor': 'middle', 'dominant-baseline': 'middle',
+        fill: '#0d1117', 'font-size': '9', 'font-weight': '600', 'font-family': 'JetBrains Mono' }, svg).textContent = 'all 32 compressed';
+    el('text', { x: compX, y: compY + 22, 'text-anchor': 'middle', fill: '#6e7681', 'font-size': '8',
+        'font-family': 'JetBrains Mono' }, svg).textContent = '32 < 8192 → no top-k needed';
+    el('line', { x1: cx - 10, y1: topY + 18, x2: compX + 20, y2: compY - compH/2, stroke: '#7ee78780', 'stroke-width': 1.5,
+        'marker-end': 'url(#arr-green-c128a)' }, svg);
+
+    // Sink
+    const sinkX = cx + 160;
+    el('rect', { x: sinkX - 16, y: topY - 12, width: 32, height: 24, rx: 5, fill: '#e6c07b' }, svg);
+    el('text', { x: sinkX, y: topY, 'text-anchor': 'middle', 'dominant-baseline': 'middle',
+        fill: '#0d1117', 'font-size': '8', 'font-weight': '700', 'font-family': 'JetBrains Mono' }, svg).textContent = 'sink';
+    el('line', { x1: cx + 18, y1: topY, x2: sinkX - 16, y2: topY, stroke: '#e6c07b80', 'stroke-width': 1.5,
+        'marker-end': 'url(#arr-gold-c128a)' }, svg);
+
+    // Original tokens bar
+    const origY = 200;
+    el('text', { x: W/2, y: origY, 'text-anchor': 'middle', fill: '#8b949e', 'font-size': '9',
+        'font-weight': '600', 'font-family': 'JetBrains Mono' }, svg).textContent = 'Original token positions 0–4096';
+    const barX = 30, barW = W - 60, barY = origY + 16, barH = 20;
+    el('rect', { x: barX, y: barY, width: barW, height: barH, rx: 4, fill: '#21262d' }, svg);
+
+    // 32 compressed blocks (each covers 128 tokens)
+    for (let j = 0; j < 32; j++) {
+        const sx = barX + (j * 128 / 4097) * barW;
+        const sw = (128 / 4097) * barW;
+        el('rect', { x: sx, y: barY, width: sw, height: barH, fill: '#7ee78766' }, svg);
+    }
+    // SWA
+    const swaFrac = 128 / 4097;
+    el('rect', { x: barX + barW * (1 - swaFrac), y: barY, width: barW * swaFrac, height: barH, rx: 4, fill: '#58a6ff' }, svg);
+
+    el('text', { x: barX + barW * 0.4, y: barY + barH + 14, 'text-anchor': 'middle', fill: '#7ee787',
+        'font-size': '8', 'font-family': 'JetBrains Mono' }, svg).textContent = 'all 32 compressed (full attn)';
+    el('text', { x: barX + barW - 20, y: barY + barH + 14, 'text-anchor': 'middle', fill: '#58a6ff',
+        'font-size': '8', 'font-family': 'JetBrains Mono' }, svg).textContent = 'SWA';
+
+    // Note about 1M
+    el('text', { x: W/2, y: barY + barH + 30, 'text-anchor': 'middle', fill: '#6e7681', 'font-size': '7.5',
+        'font-family': 'JetBrains Mono' }, svg).textContent = 'Each block covers 128 original tokens → complete coverage';
+
+    const formulaY = 290;
+    el('text', { x: W/2, y: formulaY, 'text-anchor': 'middle', fill: '#c9d1d9', 'font-size': '9',
+        'font-weight': '600', 'font-family': 'JetBrains Mono' }, svg).textContent = 'Causality: attend to C_j where 128j + 127 ≤ 4096';
+    el('text', { x: W/2, y: formulaY + 16, 'text-anchor': 'middle', fill: '#8b949e', 'font-size': '8',
+        'font-family': 'JetBrains Mono' }, svg).textContent = '→ j ≤ 31 → all 32 entries attended (full attention)';
+
+    const defs = el('defs', {}, svg);
+    [['arr-blue-c128a', '#58a6ff'], ['arr-green-c128a', '#7ee787'], ['arr-gold-c128a', '#e6c07b']].forEach(([id, color]) => {
+        const m = el('marker', { id, markerWidth: 6, markerHeight: 6, refX: 5, refY: 3, orient: 'auto' }, defs);
+        el('polygon', { points: '0 0, 6 3, 0 6', fill: color }, m);
+    });
+}
+
+function drawSWA() {
+    const svg = document.getElementById('svg-swa');
+    const W = 440, H = 340;
+    const cx = W / 2, topY = 40;
+
+    // Query
+    el('circle', { cx, cy: topY, r: 18, fill: '#f78166', stroke: '#f78166', 'stroke-width': 2 }, svg);
+    el('text', { x: cx, y: topY, 'text-anchor': 'middle', 'dominant-baseline': 'middle',
+        fill: '#fff', 'font-size': '10', 'font-weight': '700', 'font-family': 'JetBrains Mono' }, svg).textContent = 'q₄₀₉₆';
+
+    // SWA only
+    const swaY = 110;
+    const swaW = 140, swaH = 28;
+    el('rect', { x: cx - swaW/2, y: swaY - swaH/2, width: swaW, height: swaH, rx: 6, fill: '#58a6ff' }, svg);
+    el('text', { x: cx, y: swaY, 'text-anchor': 'middle', 'dominant-baseline': 'middle',
+        fill: '#fff', 'font-size': '9', 'font-weight': '600', 'font-family': 'JetBrains Mono' }, svg).textContent = '128 k(v) tokens';
+    el('text', { x: cx, y: swaY + 22, 'text-anchor': 'middle', fill: '#6e7681', 'font-size': '8',
+        'font-family': 'JetBrains Mono' }, svg).textContent = 'pos 3969–4096';
+    el('line', { x1: cx, y1: topY + 18, x2: cx, y2: swaY - swaH/2, stroke: '#58a6ff80', 'stroke-width': 1.5,
+        'marker-end': 'url(#arr-blue-swa)' }, svg);
+
+    // Sink
+    const sinkX = cx + 140;
+    el('rect', { x: sinkX - 16, y: topY - 12, width: 32, height: 24, rx: 5, fill: '#e6c07b' }, svg);
+    el('text', { x: sinkX, y: topY, 'text-anchor': 'middle', 'dominant-baseline': 'middle',
+        fill: '#0d1117', 'font-size': '8', 'font-weight': '700', 'font-family': 'JetBrains Mono' }, svg).textContent = 'sink';
+    el('line', { x1: cx + 18, y1: topY, x2: sinkX - 16, y2: topY, stroke: '#e6c07b80', 'stroke-width': 1.5,
+        'marker-end': 'url(#arr-gold-swa)' }, svg);
+
+    // "No compressed attention" label
+    el('text', { x: cx - 100, y: swaY, 'text-anchor': 'middle', fill: '#6e7681', 'font-size': '9',
+        'font-style': 'italic', 'font-family': 'JetBrains Mono' }, svg).textContent = '(no compression)';
+
+    // Original tokens bar
+    const origY = 200;
+    el('text', { x: W/2, y: origY, 'text-anchor': 'middle', fill: '#8b949e', 'font-size': '9',
+        'font-weight': '600', 'font-family': 'JetBrains Mono' }, svg).textContent = 'Original token positions 0–4096';
+    const barX = 30, barW = W - 60, barY = origY + 16, barH = 20;
+    el('rect', { x: barX, y: barY, width: barW, height: barH, rx: 4, fill: '#21262d' }, svg);
+
+    // Blind zone
+    const swaFrac = 128 / 4097;
+    el('rect', { x: barX, y: barY, width: barW * (1 - swaFrac), height: barH, rx: 4, fill: '#f7816622',
+        stroke: '#f7816644', 'stroke-width': 1, 'stroke-dasharray': '4 2' }, svg);
+    el('text', { x: barX + barW * 0.45, y: barY + barH / 2 + 1, 'text-anchor': 'middle', 'dominant-baseline': 'middle',
+        fill: '#f78166', 'font-size': '9', 'font-weight': '600', 'font-family': 'JetBrains Mono' }, svg).textContent = 'NOT ATTENDED (3969 tokens)';
+
+    // SWA region
+    el('rect', { x: barX + barW * (1 - swaFrac), y: barY, width: barW * swaFrac, height: barH, rx: 4, fill: '#58a6ff' }, svg);
+
+    el('text', { x: barX + barW - 20, y: barY + barH + 14, 'text-anchor': 'middle', fill: '#58a6ff',
+        'font-size': '8', 'font-family': 'JetBrains Mono' }, svg).textContent = 'SWA';
+
+    el('text', { x: W/2, y: barY + barH + 30, 'text-anchor': 'middle', fill: '#6e7681', 'font-size': '7.5',
+        'font-family': 'JetBrains Mono' }, svg).textContent = 'Only 3.1% of context visible — other layers compensate';
+
+    const formulaY = 290;
+    el('text', { x: W/2, y: formulaY, 'text-anchor': 'middle', fill: '#c9d1d9', 'font-size': '9',
+        'font-weight': '600', 'font-family': 'JetBrains Mono' }, svg).textContent = 'No causality check needed — pure sliding window';
+    el('text', { x: W/2, y: formulaY + 16, 'text-anchor': 'middle', fill: '#8b949e', 'font-size': '8',
+        'font-family': 'JetBrains Mono' }, svg).textContent = 'Window = 128 tokens → attend to [max(0, i-127), i]';
+
+    const defs = el('defs', {}, svg);
+    [['arr-blue-swa', '#58a6ff'], ['arr-gold-swa', '#e6c07b']].forEach(([id, color]) => {
+        const m = el('marker', { id, markerWidth: 6, markerHeight: 6, refX: 5, refY: 3, orient: 'auto' }, defs);
+        el('polygon', { points: '0 0, 6 3, 0 6', fill: color }, m);
+    });
+}
+
+drawC4A();
+drawC128A();
+drawSWA();
+</script>
+</body>
+</html>
